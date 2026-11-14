@@ -82,8 +82,8 @@ Continue refining notification reliability, usability, and cross-platform suppor
 Install Git for Windows and Node.js 24 or newer, then open PowerShell in your projects directory:
 
 ```powershell
-git clone https://github.com/Hotrodtymn/Matrix-mobile.git
-cd Matrix-mobile
+git clone https://github.com/Hotrodtymn/MatrixMobile.git
+cd MatrixMobile
 npm ci
 npm test
 npx tsc --noEmit
