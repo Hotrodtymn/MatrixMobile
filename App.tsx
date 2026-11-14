@@ -1,6 +1,10 @@
+import { TasksPage } from "./src/screens/TasksPage";
+import { supportsFlipToSilence, setFlipToSilence } from "./src/services/nativeAlarmSettings";
+import { WeekdaySelector } from "./src/components/WeekdaySelector";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  KeyboardAvoidingView,
   AppState,
   useColorScheme,
   Modal,
@@ -14,448 +18,13 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Notifications from "expo-notifications";
 import * as IntentLauncher from "expo-intent-launcher";
 import AlarmScheduler from "react-native-alarm-scheduler";
-const STORAGE_KEY = "matrix.reminders.v1";
-const NOTES_KEY = "matrix.notes.v1";
-const SETTINGS_KEY = "matrix.settings.v1";
-const ALARMS_KEY = "matrix.alarms.v1";
-const NOTIFICATION_CATEGORY = "MATRIX_REMINDER";
-type Recurrence = "once" | "daily" | "weekly" | "monthly" | "yearly";
-type AppView = "today" | "all" | "starred" | "completed";
-type MatrixAlarm = {
-  id: string;
-  title?: string;
-  hour: number;
-  minute: number;
-  enabled: boolean;
-  sound: "default" | "silent" | "custom";
-  soundUri?: string;
-  soundLabel?: string;
-  notificationId?: string;
-};
-type ClockTab = "alarm" | "timer" | "stopwatch";
-type AppSettings = {
-  notificationsEnabled: boolean;
-  defaultSnoozeMinutes: number;
-  weekStartsMonday: boolean;
-  hideCompleted: boolean;
-  theme: "default" | "dark" | "light" | "system";
-};
-const DEFAULT_SETTINGS: AppSettings = {
-  notificationsEnabled: true,
-  defaultSnoozeMinutes: 15,
-  weekStartsMonday: false,
-  hideCompleted: true,
-  theme: "default",
-};
-type Subtask = {
-  id: string;
-  title: string;
-  completed: boolean;
-};
-type Reminder = {
-  id: string;
-  title: string;
-  date: string;
-  notificationId: string;
-  recurrence?: Recurrence;
-  completed?: boolean;
-  starred?: boolean;
-  subtasks?: Subtask[];
-};
-type Note = {
-  id: string;
-  title: string;
-  body: string;
-  pinned: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
-const NOTIFICATION_ACTIONS: Notifications.NotificationAction[] = [
-  {
-    identifier: "MARK_COMPLETED",
-    buttonTitle: "Mark Completed",
-    options: { opensAppToForeground: false },
-  },
-  {
-    identifier: "DELETE",
-    buttonTitle: "Delete",
-    options: { isDestructive: true, opensAppToForeground: false },
-  },
-  {
-    identifier: "SNOOZE_5",
-    buttonTitle: "Snooze 5m",
-    options: { opensAppToForeground: false },
-  },
-  {
-    identifier: "SNOOZE_15",
-    buttonTitle: "Snooze 15m",
-    options: { opensAppToForeground: false },
-  },
-  {
-    identifier: "SNOOZE_DEFAULT",
-    buttonTitle: "Default Snooze",
-    options: { opensAppToForeground: false },
-  },
-  {
-    identifier: "SNOOZE_60",
-    buttonTitle: "Snooze 1h",
-    options: { opensAppToForeground: false },
-  },
-  {
-    identifier: "SNOOZE_TOMORROW",
-    buttonTitle: "Tomorrow",
-    options: { opensAppToForeground: false },
-  },
-  {
-    identifier: "DISMISS",
-    buttonTitle: "Dismiss",
-    options: {
-      isDestructive: true,
-      opensAppToForeground: false,
-    },
-  },
-];
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
-// Prevent a notification response from being processed twice when Android
-// reports it both as a launch response and as a listener event.
-const handledNotificationResponses = new Set<string>();
-async function cancelReminderNotifications(
-  reminderId: string,
-  fallbackNotificationId?: string,
-  exceptNotificationId?: string,
-) {
-  if (
-    fallbackNotificationId &&
-    fallbackNotificationId !== exceptNotificationId
-  ) {
-    await Notifications.cancelScheduledNotificationAsync(
-      fallbackNotificationId,
-    ).catch(() => undefined);
-  }
-  const scheduled =
-    await Notifications.getAllScheduledNotificationsAsync().catch(() => []);
-  await Promise.all(
-    scheduled
-      .filter(
-        (item) =>
-          item.identifier !== exceptNotificationId &&
-          item.content.data?.reminderId === reminderId,
-      )
-      .map((item) =>
-        Notifications.cancelScheduledNotificationAsync(item.identifier).catch(
-          () => undefined,
-        ),
-      ),
-  );
-}
-async function handleNotificationResponse(
-  response: Notifications.NotificationResponse,
-) {
-  const action = response.actionIdentifier;
-  const request = response.notification.request;
-  const requestId = request.identifier;
-  const responseKey = `${requestId}:${action}`;
-  if (action === Notifications.DEFAULT_ACTION_IDENTIFIER) return;
-  if (handledNotificationResponses.has(responseKey)) return;
-  handledNotificationResponses.add(responseKey);
-  // Keep this set bounded during a long-running app session.
-  if (handledNotificationResponses.size > 100) {
-    const oldest = handledNotificationResponses.values().next().value;
-    if (oldest) handledNotificationResponses.delete(oldest);
-  }
-  const reminderId =
-    typeof request.content.data?.reminderId === "string"
-      ? request.content.data.reminderId
-      : undefined;
-  if (action === "MARK_COMPLETED" || action === "DELETE") {
-    if (!reminderId) {
-      await Notifications.dismissNotificationAsync(requestId).catch(
-        () => undefined,
-      );
-      return;
-    }
-    const stored = await AsyncStorage.getItem(STORAGE_KEY);
-    const reminders = stored ? (JSON.parse(stored) as Reminder[]) : [];
-    const reminder = reminders.find((item) => item.id === reminderId);
-    if (!reminder) {
-      await Notifications.dismissNotificationAsync(requestId).catch(
-        () => undefined,
-      );
-      return;
-    }
-    if (action === "DELETE") {
-      await AsyncStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(reminders.filter((item) => item.id !== reminderId)),
-      );
-      await cancelReminderNotifications(reminderId, reminder.notificationId);
-      await Notifications.dismissNotificationAsync(requestId).catch(
-        () => undefined,
-      );
-      return;
-    }
-    if (getRecurrence(reminder) === "once") {
-      const updated = reminders.map((item) =>
-        item.id === reminderId ? { ...item, completed: true } : item,
-      );
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      await cancelReminderNotifications(reminderId, reminder.notificationId);
-    } else {
-      const nextDate = getTaskDate(
-        reminder,
-        new Date(new Date(reminder.date).getTime() + 1000),
-      );
-      const notificationId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: "Matrix Reminder",
-          body: reminder.title,
-          sound: "default",
-          categoryIdentifier: NOTIFICATION_CATEGORY,
-          data: { reminderId: reminder.id, title: reminder.title },
-        },
-        trigger: buildTrigger(nextDate, getRecurrence(reminder)),
-      });
-      const updated = reminders.map((item) =>
-        item.id === reminderId
-          ? {
-              ...item,
-              date: nextDate.toISOString(),
-              notificationId,
-              completed: false,
-            }
-          : item,
-      );
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      await cancelReminderNotifications(
-        reminderId,
-        reminder.notificationId,
-        notificationId,
-      );
-    }
-    await Notifications.dismissNotificationAsync(requestId).catch(
-      () => undefined,
-    );
-    return;
-  }
-  if (action === "DISMISS") {
-    await Notifications.dismissNotificationAsync(requestId).catch(
-      () => undefined,
-    );
-    return;
-  }
-  const snoozeMinutes: Record<string, number> = {
-    SNOOZE_5: 5,
-    SNOOZE_15: 15,
-    SNOOZE_60: 60,
-    SNOOZE_TOMORROW: 1440,
-  };
-  const storedSettings = await AsyncStorage.getItem(SETTINGS_KEY);
-  const preferences = storedSettings
-    ? (JSON.parse(storedSettings) as Partial<AppSettings>)
-    : {};
-  const minutes =
-    action === "SNOOZE_DEFAULT"
-      ? (preferences.defaultSnoozeMinutes ??
-        DEFAULT_SETTINGS.defaultSnoozeMinutes)
-      : snoozeMinutes[action];
-  if (!minutes) return;
-  const originalTitle =
-    typeof request.content.data?.title === "string"
-      ? request.content.data.title
-      : request.content.body || request.content.title || "Reminder";
-  const snoozeDate = new Date(Date.now() + minutes * 60 * 1000);
-  const channel = Platform.OS === "android" ? { channelId: "reminders" } : {};
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title: "Matrix Reminder · Snoozed",
-      body: originalTitle,
-      sound: "default",
-      categoryIdentifier: NOTIFICATION_CATEGORY,
-      data: {
-        reminderId,
-        title: originalTitle,
-        isSnoozed: true,
-      },
-    },
-    trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.DATE,
-      date: snoozeDate,
-      ...channel,
-    },
-  });
-  await Notifications.dismissNotificationAsync(requestId).catch(
-    () => undefined,
-  );
-}
-function getRecurrence(reminder: Reminder): Recurrence {
-  return reminder.recurrence ?? "once";
-}
-function getTaskDate(reminder: Reminder, from = new Date()): Date {
-  if (getRecurrence(reminder) === "once") {
-    return new Date(reminder.date);
-  }
-  const base = new Date(reminder.date);
-  const result = new Date(base);
-  result.setSeconds(0, 0);
-  if (getRecurrence(reminder) === "daily") {
-    result.setFullYear(from.getFullYear(), from.getMonth(), from.getDate());
-    if (result.getTime() <= from.getTime()) {
-      result.setDate(result.getDate() + 1);
-    }
-    return result;
-  }
-  if (getRecurrence(reminder) === "weekly") {
-    result.setFullYear(from.getFullYear(), from.getMonth(), from.getDate());
-    const daysAhead = (base.getDay() - result.getDay() + 7) % 7;
-    result.setDate(result.getDate() + daysAhead);
-    if (result.getTime() <= from.getTime()) {
-      result.setDate(result.getDate() + 7);
-    }
-    return result;
-  }
-  if (getRecurrence(reminder) === "yearly") {
-    result.setFullYear(from.getFullYear(), base.getMonth(), base.getDate());
-    if (result.getTime() <= from.getTime())
-      result.setFullYear(result.getFullYear() + 1);
-    return result;
-  }
-  const targetDay = base.getDate();
-  result.setDate(1);
-  result.setFullYear(from.getFullYear(), from.getMonth(), 1);
-  const lastDay = new Date(
-    result.getFullYear(),
-    result.getMonth() + 1,
-    0,
-  ).getDate();
-  result.setDate(Math.min(targetDay, lastDay));
-  if (result.getTime() <= from.getTime()) {
-    result.setMonth(result.getMonth() + 1, 1);
-    const nextLastDay = new Date(
-      result.getFullYear(),
-      result.getMonth() + 1,
-      0,
-    ).getDate();
-    result.setDate(Math.min(targetDay, nextLastDay));
-  }
-  return result;
-}
-function dateKey(date: Date): string {
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-}
-function isToday(date: Date): boolean {
-  return dateKey(date) === dateKey(new Date());
-}
-function reminderOccursOnDate(reminder: Reminder, targetDate: Date): boolean {
-  const base = new Date(reminder.date);
-  const target = new Date(targetDate);
-  if (getRecurrence(reminder) === "once")
-    return dateKey(base) === dateKey(target);
-  if (getRecurrence(reminder) === "daily") return true;
-  if (getRecurrence(reminder) === "weekly")
-    return base.getDay() === target.getDay();
-  if (getRecurrence(reminder) === "yearly") {
-    return (
-      base.getMonth() === target.getMonth() &&
-      base.getDate() === target.getDate()
-    );
-  }
-  const lastDayOfTargetMonth = new Date(
-    target.getFullYear(),
-    target.getMonth() + 1,
-    0,
-  ).getDate();
-  return Math.min(base.getDate(), lastDayOfTargetMonth) === target.getDate();
-}
-function getReminderOccurrenceDate(reminder: Reminder, targetDate: Date): Date {
-  const base = new Date(reminder.date);
-  const result = new Date(targetDate);
-  result.setHours(base.getHours(), base.getMinutes(), 0, 0);
-  return result;
-}
-function formatDate(value: string | Date): string {
-  return new Date(value).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-function formatTime(value: string | Date): string {
-  return new Date(value).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-function recurrenceLabel(recurrence?: Recurrence): string {
-  switch (recurrence ?? "once") {
-    case "daily":
-      return "Repeats daily";
-    case "weekly":
-      return "Repeats weekly";
-    case "monthly":
-      return "Repeats monthly";
-    case "yearly":
-      return "Repeats yearly";
-    default:
-      return "One-time reminder";
-  }
-}
-function buildTrigger(date: Date, recurrence: Recurrence) {
-  const channel = Platform.OS === "android" ? { channelId: "reminders" } : {};
-  if (recurrence === "daily") {
-    return {
-      type: Notifications.SchedulableTriggerInputTypes.DAILY,
-      hour: date.getHours(),
-      minute: date.getMinutes(),
-      ...channel,
-    } satisfies Notifications.NotificationTriggerInput;
-  }
-  if (recurrence === "weekly") {
-    return {
-      type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
-      weekday: date.getDay() + 1,
-      hour: date.getHours(),
-      minute: date.getMinutes(),
-      ...channel,
-    } satisfies Notifications.NotificationTriggerInput;
-  }
-  if (recurrence === "monthly") {
-    return {
-      type: Notifications.SchedulableTriggerInputTypes.MONTHLY,
-      day: date.getDate(),
-      hour: date.getHours(),
-      minute: date.getMinutes(),
-      ...channel,
-    } satisfies Notifications.NotificationTriggerInput;
-  }
-  if (recurrence === "yearly") {
-    return {
-      type: Notifications.SchedulableTriggerInputTypes.YEARLY,
-      month: date.getMonth() + 1,
-      day: date.getDate(),
-      hour: date.getHours(),
-      minute: date.getMinutes(),
-      ...channel,
-    } satisfies Notifications.NotificationTriggerInput;
-  }
-  return {
-    type: Notifications.SchedulableTriggerInputTypes.DATE,
-    date,
-    ...channel,
-  } satisfies Notifications.NotificationTriggerInput;
-}
+import { refreshLegacyNotificationText, mergeReminderChanges, STORAGE_KEY, NOTES_KEY, SETTINGS_KEY, ALARMS_KEY, NOTIFICATION_CATEGORY, Recurrence, AppView, MatrixAlarm, ClockTab, AppSettings, DEFAULT_SETTINGS, Subtask, Reminder, Note, NOTIFICATION_ACTIONS, serializeReminderMutation, cancelReminderNotifications, reminderContent, scheduleReminder, homeReminderVisible, homeAlarmVisible, handleNotificationResponse, getRecurrence, getTaskDate, isToday, getReminderOccurrenceDate, formatDate, formatTime, recurrenceLabel, buildTrigger } from "./src/services/reminders";
 function getDefaultReminderDate() {
   const date = new Date();
   date.setSeconds(0, 0);
@@ -466,6 +35,10 @@ function getDefaultReminderDate() {
 }
 export default function App() {
   const [title, setTitle] = useState("");
+  const [weekdays, setWeekdays] = useState<number[]>([]);
+  const [alarmWeekdays, setAlarmWeekdays] = useState<number[]>([0,1,2,3,4,5,6]);
+  const [editingReminderId, setEditingReminderId] = useState<string | null>(null);
+  const [description, setDescription] = useState("");
   const [subtaskDraft, setSubtaskDraft] = useState("");
   const [reminderDate, setReminderDate] = useState(getDefaultReminderDate());
   const [recurrence, setRecurrence] = useState<Recurrence>("once");
@@ -485,6 +58,7 @@ export default function App() {
   );
   // Notes have their own storage key and do not change reminder data.
   const [showHome, setShowHome] = useState(true);
+  const [showTasks, setShowTasks] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [showTaskList, setShowTaskList] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -843,6 +417,7 @@ export default function App() {
         }
         if (storedReminders) {
           const parsed = JSON.parse(storedReminders) as Reminder[];
+          await serializeReminderMutation(() => refreshLegacyNotificationText(parsed)).catch(error => console.error("Could not update pending notification text:", error));
           setReminders(
             parsed.map((reminder) => ({
               ...reminder,
@@ -866,10 +441,10 @@ export default function App() {
         setLoading(false);
       }
     }
-    void initialize();
+    const ready = initialize();
     responseListener.current =
       Notifications.addNotificationResponseReceivedListener((response) => {
-        void handleNotificationResponse(response)
+        void ready.then(() => handleNotificationResponse(response))
           .then(async () => {
             const stored = await AsyncStorage.getItem(STORAGE_KEY);
             if (stored) setReminders(JSON.parse(stored) as Reminder[]);
@@ -882,7 +457,9 @@ export default function App() {
     void Notifications.getLastNotificationResponseAsync()
       .then(async (response) => {
         if (response) {
+          await ready;
           await handleNotificationResponse(response);
+          await Notifications.clearLastNotificationResponseAsync();
           const stored = await AsyncStorage.getItem(STORAGE_KEY);
           if (stored) setReminders(JSON.parse(stored) as Reminder[]);
           setNow(Date.now());
@@ -919,25 +496,38 @@ export default function App() {
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30000);
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") setNow(Date.now());
+      if (state === "active") {
+        setNow(Date.now());
+        void AsyncStorage.getItem(STORAGE_KEY).then(stored => {
+          if (stored) setReminders(JSON.parse(stored));
+        }).catch(console.error);
+      }
     });
     return () => {
       clearInterval(timer);
       subscription.remove();
     };
   }, []);
+  useEffect(() => {
+    if (!loading) void setFlipToSilence(settings.flipToSilence).catch(console.error);
+  }, [settings.flipToSilence, loading]);
   async function updateSetting<K extends keyof AppSettings>(
     key: K,
     value: AppSettings[K],
   ) {
     const updated = { ...settings, [key]: value };
-    setSettings(updated);
     try {
+      if (key === "flipToSilence") await setFlipToSilence(value as boolean);
       await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+      setSettings(updated);
     } catch (error) {
       console.error("Could not save Matrix settings:", error);
       Alert.alert("Could not save setting", "Please try again.");
     }
+  }
+  function cancelReminderEditor() {
+    setShowCalendarReminderModal(false); setEditingReminderId(null); setTitle(""); setDescription("");
+    setSubtaskDraft(""); setRecurrence("once"); setWeekdays([]); setReminderDate(getDefaultReminderDate());
   }
   function startReminderFromCalendar() {
     const selected = new Date(selectedCalendarDate);
@@ -949,6 +539,9 @@ export default function App() {
       if (selected.getTime() <= Date.now())
         selected.setDate(selected.getDate() + 1);
     }
+    setEditingReminderId(null);
+    setWeekdays([]);
+    setDescription("");
     setReminderDate(selected);
     setTitle("");
     setSubtaskDraft("");
@@ -956,8 +549,8 @@ export default function App() {
     setShowCalendarReminderModal(true);
   }
   async function saveAlarms(updated: MatrixAlarm[]) {
-    setAlarms(updated);
     await AsyncStorage.setItem(ALARMS_KEY, JSON.stringify(updated));
+    setAlarms(updated);
   }
   async function scheduleAlarmNotification(
     alarm: MatrixAlarm,
@@ -968,21 +561,25 @@ export default function App() {
       if (!requested.granted)
         throw new Error("Notification permission is required for alarms.");
     }
-    const notificationId = await Notifications.scheduleNotificationAsync({
-      content: {
-        title: alarm.title?.trim() || "Matrix Alarm",
-        body: "Your alarm is ringing.",
-        sound: alarm.sound === "silent" ? false : "default",
-        data: { kind: "matrix-alarm", alarmId: alarm.id },
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DAILY,
-        hour: alarm.hour,
-        minute: alarm.minute,
-        channelId: "reminders",
-      },
-    });
-    return notificationId;
+    const days = alarm.weekdays ?? [0,1,2,3,4,5,6];
+    const ids: string[] = [];
+    try {
+      for (const day of days.length ? days : [null]) {
+        ids.push(await Notifications.scheduleNotificationAsync({
+          content: { title: alarm.title?.trim() || "Alarm", sound: alarm.sound === "silent" ? false : "default", data: { kind: "matrix-alarm", alarmId: alarm.id } },
+          trigger: day === null ? buildTrigger(new Date(alarm.scheduledFor!), "once") : {
+            type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+            weekday: day + 1, hour: alarm.hour, minute: alarm.minute,
+            ...(Platform.OS === "android" ? { channelId: "reminders" } : {}),
+          },
+        }));
+      }
+      alarm.notificationIds = ids;
+      return ids[0];
+    } catch (error) {
+      await Promise.all(ids.map(id => Notifications.cancelScheduledNotificationAsync(id)));
+      throw error;
+    }
   }
   async function scheduleNativeAlarm(alarm: MatrixAlarm): Promise<void> {
     let permission = await AlarmScheduler.getPermissionsAsync();
@@ -1009,7 +606,8 @@ export default function App() {
       hour: alarm.hour,
       minute: alarm.minute,
       title: alarm.title?.trim() || "Matrix Alarm",
-      weekdays: [1, 2, 3, 4, 5, 6, 7],
+      weekdays: (alarm.weekdays ?? [0,1,2,3,4,5,6]).map(day => day === 0 ? 7 : day) as (1|2|3|4|5|6|7)[],
+      timestamp: alarm.weekdays?.length === 0 && alarm.scheduledFor ? new Date(alarm.scheduledFor).getTime() : undefined,
       android: {
         alertTitle: alarm.title?.trim() || "Matrix Alarm",
         alertBody: "Your alarm is ringing.",
@@ -1028,11 +626,10 @@ export default function App() {
     if (Platform.OS === "android") {
       await AlarmScheduler.cancelAlarmAsync(alarm.id).catch(() => false);
     }
-    if (alarm.notificationId) {
-      await Notifications.cancelScheduledNotificationAsync(
-        alarm.notificationId,
-      ).catch(() => undefined);
-    }
+    const ids = new Set([...(alarm.notificationIds ?? []), ...(alarm.notificationId ? [alarm.notificationId] : [])]);
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    for (const item of scheduled) if (item.content.data?.alarmId === alarm.id) ids.add(item.identifier);
+    await Promise.all([...ids].map(id => Notifications.cancelScheduledNotificationAsync(id)));
   }
   async function migrateLegacyAlarms(
     savedAlarms: MatrixAlarm[],
@@ -1123,6 +720,7 @@ export default function App() {
     d.setSeconds(0, 0);
     d.setMinutes(d.getMinutes() + 1);
     setEditingAlarmId(null);
+    setAlarmWeekdays([0,1,2,3,4,5,6]);
     setAlarmTitle("Alarm");
     setAlarmTime(d);
     setAlarmSound("default");
@@ -1135,6 +733,7 @@ export default function App() {
     const d = new Date();
     d.setHours(alarm.hour, alarm.minute, 0, 0);
     setEditingAlarmId(alarm.id);
+    setAlarmWeekdays(alarm.weekdays ?? [0,1,2,3,4,5,6]);
     setAlarmTitle(alarm.title || "Alarm");
     setAlarmTime(d);
     setAlarmSound(alarm.sound || "default");
@@ -1150,11 +749,13 @@ export default function App() {
     setShowAlarmTimePicker(false);
     setShowAlarmModal(true);
   }
+  const alarmSavePending = useRef(false);
   async function addAlarm() {
+    if (alarmSavePending.current) return;
+    alarmSavePending.current = true;
+    const existing = editingAlarmId ? alarms.find(item => item.id === editingAlarmId) : undefined;
+    let scheduledDraft: MatrixAlarm | undefined;
     try {
-      const existing = editingAlarmId
-        ? alarms.find((item) => item.id === editingAlarmId)
-        : undefined;
       const draft: MatrixAlarm = {
         id:
           existing?.id ||
@@ -1163,13 +764,14 @@ export default function App() {
         hour: alarmTime.getHours(),
         minute: alarmTime.getMinutes(),
         enabled: existing?.enabled ?? true,
+        weekdays: alarmWeekdays,
+        scheduledFor: (() => { const d = new Date(); d.setHours(alarmTime.getHours(), alarmTime.getMinutes(), 0, 0); if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1); return d.toISOString(); })(),
         sound: alarmSound,
         soundUri: alarmSound === "custom" ? alarmSoundUri : undefined,
         soundLabel: alarmSoundLabel,
       };
-      if (existing) {
-        await cancelAlarmSchedule(existing);
-      }
+      if (existing) await cancelAlarmSchedule(existing);
+      scheduledDraft = draft;
       if (draft.enabled) {
         if (Platform.OS === "android") {
           await scheduleNativeAlarm(draft);
@@ -1186,18 +788,32 @@ export default function App() {
       setEditingAlarmId(null);
       Alert.alert(
         existing ? "Alarm updated" : "Alarm added",
-        `${draft.title} · ${formatTime(new Date(2000, 0, 1, draft.hour, draft.minute))} daily.`,
+        `${draft.title} · ${formatTime(new Date(2000, 0, 1, draft.hour, draft.minute))} · ${alarmWeekdays.length === 0 ? "Once" : alarmWeekdays.length === 7 ? "Daily" : alarmWeekdays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")}.`,
       );
     } catch (error) {
+      if (scheduledDraft) {
+        await cancelAlarmSchedule(scheduledDraft).catch(console.error);
+        if (existing?.enabled) {
+          try {
+            if (Platform.OS === "android") await scheduleNativeAlarm(existing);
+            else existing.notificationId = await scheduleAlarmNotification(existing);
+            await saveAlarms(alarms.map(item => item.id === existing.id ? existing : item));
+          } catch (restoreError) { console.error("Could not restore previous alarm:", restoreError); }
+        }
+      }
       Alert.alert(
         "Could not save alarm",
         error instanceof Error
           ? error.message
           : "Please check alarm permissions and try again.",
       );
+    } finally {
+      alarmSavePending.current = false;
     }
   }
   async function toggleAlarm(alarm: MatrixAlarm) {
+    if (alarmSavePending.current) return;
+    alarmSavePending.current = true;
     try {
       if (alarm.enabled) {
         await cancelAlarmSchedule(alarm);
@@ -1209,6 +825,9 @@ export default function App() {
           ),
         );
       } else {
+        const next = new Date(); next.setHours(alarm.hour, alarm.minute, 0, 0);
+        if (next.getTime() <= Date.now()) next.setDate(next.getDate() + 1);
+        alarm = { ...alarm, scheduledFor: next.toISOString() };
         let notificationId: string | undefined;
         if (Platform.OS === "android") {
           await scheduleNativeAlarm(alarm);
@@ -1218,7 +837,7 @@ export default function App() {
         await saveAlarms(
           alarms.map((item) =>
             item.id === alarm.id
-              ? { ...item, enabled: true, notificationId }
+              ? { ...alarm, enabled: true, notificationId }
               : item,
           ),
         );
@@ -1228,11 +847,22 @@ export default function App() {
         "Could not update alarm",
         error instanceof Error ? error.message : "Please try again.",
       );
+    } finally {
+      alarmSavePending.current = false;
     }
   }
   async function deleteAlarm(alarm: MatrixAlarm) {
-    await cancelAlarmSchedule(alarm);
-    await saveAlarms(alarms.filter((item) => item.id !== alarm.id));
+    if (alarmSavePending.current) return;
+    alarmSavePending.current = true;
+    try {
+      await cancelAlarmSchedule(alarm);
+      await saveAlarms(alarms.filter((item) => item.id !== alarm.id));
+    } catch (error) {
+      console.error("Could not delete alarm:", error);
+      Alert.alert("Could not delete alarm", "Please try again.");
+    } finally {
+      alarmSavePending.current = false;
+    }
   }
   async function startTimer() {
     const duration = Math.max(
@@ -1293,8 +923,12 @@ export default function App() {
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
   }
   async function saveReminders(updated: Reminder[]) {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    setReminders(updated);
+    await serializeReminderMutation(async () => {
+      const latest: Reminder[] = JSON.parse(await AsyncStorage.getItem(STORAGE_KEY) || "[]");
+      const merged = mergeReminderChanges(reminders, updated, latest);
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+      setReminders(merged);
+    });
   }
   async function saveNotes(updated: Note[]) {
     await AsyncStorage.setItem(NOTES_KEY, JSON.stringify(updated));
@@ -1316,7 +950,11 @@ export default function App() {
       );
       return false;
     }
+    if (recurrence === "selectedDays" && weekdays.length === 0) {
+      Alert.alert("Choose days", "Select at least one weekday."); return false;
+    }
     setSaving(true);
+    let notificationIds: string[] = [];
     let notificationId: string | undefined;
     try {
       let granted = settings.notificationsEnabled;
@@ -1334,19 +972,13 @@ export default function App() {
           return false;
         }
       }
-      const taskId = `${Date.now()}-${Math.random()}`;
-      notificationId = settings.notificationsEnabled
-        ? await Notifications.scheduleNotificationAsync({
-            content: {
-              title: "Matrix Reminder",
-              body: cleanTitle,
-              sound: "default",
-              categoryIdentifier: NOTIFICATION_CATEGORY,
-              data: { reminderId: taskId, title: cleanTitle },
-            },
-            trigger: buildTrigger(reminderDate, recurrence),
-          })
-        : "";
+      const taskId = editingReminderId || `${Date.now()}-${Math.random()}`;
+      const existing = reminders.find(item => item.id === editingReminderId);
+      notificationIds = settings.notificationsEnabled ? await scheduleReminder({
+        id: taskId, title: cleanTitle, description: description.trim(), date: reminderDate.toISOString(),
+        recurrence, weekdays, notificationId: "",
+      }) : [];
+      notificationId = notificationIds[0] || "";
       const subtasks: Subtask[] = subtaskDraft
         .split("\n")
         .map((item) => item.trim())
@@ -1357,17 +989,32 @@ export default function App() {
           completed: false,
         }));
       const newReminder: Reminder = {
+        ...existing,
         id: taskId,
         title: cleanTitle,
+        description: description.trim(),
         date: reminderDate.toISOString(),
         notificationId,
+        notificationIds,
+        weekdays,
+        completedThrough: undefined,
+        snoozedUntil: undefined,
         recurrence,
         completed: false,
-        starred: false,
-        subtasks,
+        starred: existing?.starred ?? false,
+        subtasks: existing && subtaskDraft === (existing.subtasks ?? []).map(item => item.title).join("\n") ? existing.subtasks : subtasks,
       };
-      await saveReminders([newReminder, ...reminders]);
+      await saveReminders(existing ? reminders.map(item => item.id === existing.id ? newReminder : item) : [newReminder, ...reminders]);
+      if (existing) {
+        await cancelReminderNotifications(existing.id, existing.notificationId, notificationIds).catch(error => {
+          console.error("Reminder saved but old alerts could not be cancelled:", error);
+          Alert.alert("Reminder saved", "Some previous alerts could not be cancelled. Reopen the reminder and save again to retry.");
+        });
+      }
+      // Selected-day requests must all survive replacement cleanup.
+      setEditingReminderId(null);
       setTitle("");
+      setDescription("");
       setSubtaskDraft("");
       setRecurrence("once");
       setReminderDate(getDefaultReminderDate());
@@ -1377,11 +1024,7 @@ export default function App() {
       return true;
     } catch (error) {
       console.error("Could not create task:", error);
-      if (notificationId) {
-        await Notifications.cancelScheduledNotificationAsync(
-          notificationId,
-        ).catch(() => undefined);
-      }
+      await Promise.all(notificationIds.map(id => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
       Alert.alert("Couldn't save reminder", "Please try again.");
       return false;
     } finally {
@@ -1400,9 +1043,7 @@ export default function App() {
           onPress: () => {
             void (async () => {
               try {
-                await Notifications.cancelScheduledNotificationAsync(
-                  reminder.notificationId,
-                ).catch(() => undefined);
+                await cancelReminderNotifications(reminder.id, reminder.notificationId);
                 await saveReminders(
                   reminders.filter((item) => item.id !== reminder.id),
                 );
@@ -1429,50 +1070,20 @@ export default function App() {
   }
   async function completeReminder(reminder: Reminder) {
     try {
-      if (getRecurrence(reminder) === "once") {
-        const updated = reminders.map((item) =>
-          item.id === reminder.id ? { ...item, completed: true } : item,
-        );
-        await saveReminders(updated);
-        await Notifications.cancelScheduledNotificationAsync(
-          reminder.notificationId,
-        ).catch(() => undefined);
-        return;
-      }
-      const nextDate = getTaskDate(
-        reminder,
-        new Date(new Date(reminder.date).getTime() + 1000),
-      );
-      const notificationId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: "Matrix Reminder",
-          body: reminder.title,
-          sound: "default",
-          categoryIdentifier: NOTIFICATION_CATEGORY,
-          data: { reminderId: reminder.id, title: reminder.title },
-        },
-        trigger: buildTrigger(nextDate, getRecurrence(reminder)),
+      await handleNotificationResponse({
+        actionIdentifier: "MARK_COMPLETED",
+        notification: { date: getRecurrence(reminder) === "once" ? Date.now() : Math.max(Date.now(), getReminderOccurrenceDate(reminder, new Date()).getTime()), request: {
+          identifier: reminder.notificationId || reminder.id,
+          content: { title: reminder.title, subtitle: null, body: reminder.description || null, sound: "default", categoryIdentifier: NOTIFICATION_CATEGORY, data: { reminderId: reminder.id } },
+          trigger: null,
+        } },
       });
-      const updated = reminders.map((item) =>
-        item.id === reminder.id
-          ? {
-              ...item,
-              date: nextDate.toISOString(),
-              notificationId,
-              completed: false,
-            }
-          : item,
-      );
-      await saveReminders(updated);
-      await Notifications.cancelScheduledNotificationAsync(
-        reminder.notificationId,
-      ).catch(() => undefined);
+      const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      if (stored) setReminders(JSON.parse(stored));
+      setNow(Date.now());
     } catch (error) {
-      console.error("Could not complete task:", error);
-      Alert.alert(
-        "Couldn't complete reminder",
-        "Matrix couldn't save this change. Please try again.",
-      );
+      console.error("Could not complete reminder:", error);
+      Alert.alert("Couldn't complete reminder", "Please try again.");
     }
   }
   async function restoreReminder(reminder: Reminder) {
@@ -1482,13 +1093,7 @@ export default function App() {
         let notificationId = reminder.notificationId;
         if (settings.notificationsEnabled && nextDate.getTime() > Date.now()) {
           notificationId = await Notifications.scheduleNotificationAsync({
-            content: {
-              title: "Matrix Reminder",
-              body: reminder.title,
-              sound: "default",
-              categoryIdentifier: NOTIFICATION_CATEGORY,
-              data: { reminderId: reminder.id, title: reminder.title },
-            },
+            content: reminderContent(reminder),
             trigger: buildTrigger(nextDate, "once"),
           });
         } else {
@@ -1748,6 +1353,7 @@ export default function App() {
             >
               {reminder.title}
             </Text>
+            {!!reminder.description && <Text style={themeStyles.taskDate}>{reminder.description}</Text>}
             <Text
               style={[themeStyles.taskDate, overdue && themeStyles.overdueText]}
             >
@@ -1795,6 +1401,12 @@ export default function App() {
         </View>
         {expanded && (
           <View style={themeStyles.subtaskArea}>
+            <Pressable style={themeStyles.noteActionButton} onPress={() => {
+              setSelectedCalendarDate(new Date(reminder.date)); setEditingReminderId(reminder.id); setTitle(reminder.title); setDescription(reminder.description ?? "");
+              setReminderDate(getTaskDate(reminder)); setRecurrence(getRecurrence(reminder)); setWeekdays(reminder.weekdays ?? []);
+              setSubtaskDraft((reminder.subtasks ?? []).map(item => item.title).join("\n"));
+              setShowCalendarReminderModal(true);
+            }}><Text style={themeStyles.noteActionText}>EDIT REMINDER</Text></Pressable>
             {children.map((child) => (
               <Pressable
                 key={child.id}
@@ -1917,6 +1529,7 @@ export default function App() {
     );
   }
   return (
+    <SafeAreaProvider>
     <SafeAreaView
       style={themeStyles.safeArea}
       edges={["top", "left", "right", "bottom"]}
@@ -1946,6 +1559,7 @@ export default function App() {
           accessibilityRole="button"
           accessibilityLabel="Go to home screen"
           onPress={() => {
+            setShowTasks(false);
             setShowHome(true);
             setShowNotes(false);
             setShowTaskList(false);
@@ -1990,10 +1604,19 @@ export default function App() {
             </View>
 
             <Text style={themeStyles.menuSectionLabel}>WORKSPACE</Text>
+            <Pressable style={[themeStyles.menuItem, showTasks && themeStyles.menuItemActive]}
+              accessibilityRole="button" accessibilityLabel="Tasks"
+              onPress={() => {
+                setShowTasks(true); setShowHome(false); setShowNotes(false); setShowTaskList(false);
+                setShowSettings(false); setShowCalendar(false); setShowClock(false); setShowMenu(false);
+              }}>
+              <Text style={themeStyles.menuItemIcon}>☑</Text>
+              <Text style={[themeStyles.menuItemText, showTasks && themeStyles.menuItemTextActive]}>Tasks</Text>
+            </Pressable>
             <Pressable
               style={[
                 themeStyles.menuItem,
-                !showHome &&
+                !showTasks && !showHome &&
                   !showNotes &&
                   !showSettings &&
                   !showCalendar &&
@@ -2001,6 +1624,7 @@ export default function App() {
                   themeStyles.menuItemActive,
               ]}
               onPress={() => {
+                setShowTasks(false);
                 setShowHome(false);
                 setShowNotes(false);
                 setShowTaskList(false);
@@ -2014,7 +1638,7 @@ export default function App() {
               <Text
                 style={[
                   themeStyles.menuItemText,
-                  !showHome &&
+                  !showTasks && !showHome &&
                     !showNotes &&
                     !showSettings &&
                     !showCalendar &&
@@ -2022,7 +1646,7 @@ export default function App() {
                     themeStyles.menuItemTextActive,
                 ]}
               >
-                Tasks & Reminders
+                Reminders
               </Text>
             </Pressable>
             <Pressable
@@ -2031,6 +1655,7 @@ export default function App() {
                 showCalendar && themeStyles.menuItemActive,
               ]}
               onPress={() => {
+                setShowTasks(false);
                 setShowHome(false);
                 setShowNotes(false);
                 setShowTaskList(false);
@@ -2056,6 +1681,7 @@ export default function App() {
                 showClock && themeStyles.menuItemActive,
               ]}
               onPress={() => {
+                setShowTasks(false);
                 setShowHome(false);
                 setShowNotes(false);
                 setShowTaskList(false);
@@ -2081,6 +1707,7 @@ export default function App() {
                 showNotes && themeStyles.menuItemActive,
               ]}
               onPress={() => {
+                setShowTasks(false);
                 setShowHome(false);
                 setShowNotes(true);
                 setShowTaskList(false);
@@ -2109,6 +1736,7 @@ export default function App() {
                 showSettings && themeStyles.menuItemActive,
               ]}
               onPress={() => {
+                setShowTasks(false);
                 setShowHome(false);
                 setShowNotes(false);
                 setShowTaskList(false);
@@ -2138,6 +1766,8 @@ export default function App() {
           </View>
         </View>
       </Modal>
+      {showTasks ? <TasksPage light={isLightTheme} onBack={() => { setShowTasks(false); setShowHome(true); }} /> : (
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <ScrollView
         style={themeStyles.list}
         contentContainerStyle={themeStyles.content}
@@ -2166,8 +1796,7 @@ export default function App() {
                   {
                     reminders.filter(
                       (item) =>
-                        !item.completed &&
-                        reminderOccursOnDate(item, new Date(now)),
+                        homeReminderVisible(item, new Date(now)),
                     ).length
                   }
                 </Text>
@@ -2192,7 +1821,7 @@ export default function App() {
               </Text>
             ) : reminders.filter(
                 (item) =>
-                  !item.completed && reminderOccursOnDate(item, new Date(now)),
+                  homeReminderVisible(item, new Date(now)),
               ).length === 0 ? (
               <View style={themeStyles.emptyCard}>
                 <Text style={themeStyles.emptyIcon}>◷</Text>
@@ -2207,8 +1836,7 @@ export default function App() {
               reminders
                 .filter(
                   (item) =>
-                    !item.completed &&
-                    reminderOccursOnDate(item, new Date(now)),
+                    homeReminderVisible(item, new Date(now)),
                 )
                 .sort(
                   (a, b) =>
@@ -2231,10 +1859,10 @@ export default function App() {
             >
               <Text style={themeStyles.sectionTitle}>TODAY'S ALARMS</Text>
               <Text style={themeStyles.count}>
-                {alarms.filter((alarm) => alarm.enabled).length}
+                {alarms.filter((alarm) => homeAlarmVisible(alarm, new Date(now))).length}
               </Text>
             </View>
-            {alarms.filter((alarm) => alarm.enabled).length === 0 ? (
+            {alarms.filter((alarm) => homeAlarmVisible(alarm, new Date(now))).length === 0 ? (
               <View style={themeStyles.emptyCard}>
                 <Text style={themeStyles.emptyIcon}>◴</Text>
                 <Text style={themeStyles.emptyTitle}>No active alarms</Text>
@@ -2256,7 +1884,7 @@ export default function App() {
               </View>
             ) : (
               alarms
-                .filter((alarm) => alarm.enabled)
+                .filter((alarm) => homeAlarmVisible(alarm, new Date(now)))
                 .slice()
                 .sort(
                   (a, b) => a.hour * 60 + a.minute - (b.hour * 60 + b.minute),
@@ -2377,6 +2005,7 @@ export default function App() {
                           <Text style={themeStyles.alarmTitle}>
                             {alarm.title || "Alarm"}
                           </Text>
+                          <Text style={themeStyles.taskDate}>{alarm.weekdays?.length === 0 ? "Once" : (alarm.weekdays ?? [0,1,2,3,4,5,6]).length === 7 ? "Daily" : alarm.weekdays?.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(" · ")}</Text>
                           <Text style={themeStyles.settingsHelp}>
                             Every day ·{" "}
                             {alarm.sound === "silent"
@@ -2585,6 +2214,14 @@ export default function App() {
               </Text>
             </View>
             <Text style={themeStyles.sectionTitle}>REMINDERS</Text>
+            <View style={themeStyles.settingsCard}>
+              <Text style={themeStyles.settingsTitle}>Flip to Silence</Text>
+              <Text style={themeStyles.settingsHelp}>
+                {supportsFlipToSilence ? "Turn your phone face down while an alarm rings." : Platform.OS === "android" ? "Update Matrix to enable this setting." : "Available on Android."}
+              </Text>
+              <Switch accessibilityLabel="Flip to Silence" value={settings.flipToSilence}
+                disabled={!supportsFlipToSilence} onValueChange={value => void updateSetting("flipToSilence", value)} />
+            </View>
             <View style={themeStyles.settingsCard}>
               <View style={themeStyles.settingRow}>
                 <View style={themeStyles.settingCopy}>
@@ -3139,9 +2776,9 @@ export default function App() {
                 returnKeyType="next"
                 maxLength={150}
               />
-              <Text style={themeStyles.label}>
-                ADD CHECKLIST STEPS (OPTIONAL)
-              </Text>
+              <Text style={themeStyles.label}>DESCRIPTION (OPTIONAL)</Text>
+              <TextInput style={themeStyles.input} value={description} onChangeText={setDescription} maxLength={1200} />
+              <Text style={themeStyles.label}>CHECKLIST STEPS (OPTIONAL)</Text>
               <TextInput
                 style={[themeStyles.input, themeStyles.multilineInput]}
                 value={subtaskDraft}
@@ -3177,22 +2814,25 @@ export default function App() {
                   </View>
                 </Pressable>
               </View>
-              <Text style={themeStyles.repeatHint}>
-                {recurrenceLabel(recurrence)} · Tap the schedule above to change
-                date, time, or repeat.
-              </Text>
+
+              <View style={themeStyles.modalActions}>
               <Pressable
                 style={[
                   themeStyles.addButton,
+                  { flex: 1 },
                   (saving || loading) && themeStyles.buttonDisabled,
                 ]}
                 onPress={() => void addReminder()}
                 disabled={saving || loading}
               >
                 <Text style={themeStyles.addButtonText}>
-                  {saving ? "SAVING..." : "+  CREATE REMINDER"}
+                  {saving ? "SAVING..." : "SAVE REMINDER"}
                 </Text>
               </Pressable>
+              <Pressable style={themeStyles.modalSecondaryButton} onPress={() => {
+                setTitle(""); setDescription(""); setSubtaskDraft(""); setRecurrence("once"); setWeekdays([]); setEditingReminderId(null); setShowHome(true);
+              }}><Text style={themeStyles.modalSecondaryText}>CANCEL</Text></Pressable>
+              </View>
             </View>
             <Pressable
               style={themeStyles.taskListButton}
@@ -3214,6 +2854,8 @@ export default function App() {
           </>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
+      )}
       <Modal
         visible={showAlarmModal}
         transparent
@@ -3223,15 +2865,16 @@ export default function App() {
           setShowAlarmTimePicker(false);
         }}
       >
-        <View style={themeStyles.modalOverlay}>
-          <View style={themeStyles.scheduleModal}>
+        <SafeAreaView style={themeStyles.modalOverlay}>
+          <ScrollView style={[themeStyles.scheduleModal, { flexGrow: 0, maxHeight: "95%" }]} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 20 }}>
             <Text style={themeStyles.modalTitle}>
               {editingAlarmId ? "EDIT ALARM" : "CREATE ALARM"}
             </Text>
             <Text style={themeStyles.modalSubtitle}>
-              Choose a title, time, and sound for your daily alarm.
+              Choose a title, time, and sound. Leave all days off for a one-time alarm.
             </Text>
             <Text style={themeStyles.label}>ALARM TITLE</Text>
+            <WeekdaySelector value={alarmWeekdays} onChange={setAlarmWeekdays} light={isLightTheme} />
             <TextInput
               style={themeStyles.alarmTitleInput}
               value={alarmTitle}
@@ -3360,18 +3003,19 @@ export default function App() {
                 </Text>
               </Pressable>
             </View>
-          </View>
-        </View>
+          </ScrollView>
+        </SafeAreaView>
       </Modal>
       <Modal
         visible={showCalendarReminderModal}
         transparent
         animationType="fade"
-        onRequestClose={() => setShowCalendarReminderModal(false)}
+        onRequestClose={cancelReminderEditor}
       >
-        <View style={themeStyles.modalOverlay}>
+        <SafeAreaView style={themeStyles.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%", flex: 1, justifyContent: "center" }}>
           <View style={themeStyles.scheduleModal}>
-            <Text style={themeStyles.modalTitle}>CREATE REMINDER</Text>
+            <Text style={themeStyles.modalTitle}>{editingReminderId ? "EDIT REMINDER" : "CREATE REMINDER"}</Text>
             <Text style={themeStyles.modalSubtitle}>
               For{" "}
               {selectedCalendarDate.toLocaleDateString([], {
@@ -3394,6 +3038,8 @@ export default function App() {
                 maxLength={150}
                 autoFocus
               />
+              <Text style={themeStyles.label}>DESCRIPTION (OPTIONAL)</Text>
+              <TextInput style={themeStyles.input} value={description} onChangeText={setDescription} maxLength={1200} />
               <Text style={themeStyles.label}>CHECKLIST STEPS (OPTIONAL)</Text>
               <TextInput
                 style={[themeStyles.input, themeStyles.multilineInput]}
@@ -3430,14 +3076,11 @@ export default function App() {
                   </View>
                 </Pressable>
               </View>
-              <Text style={themeStyles.repeatHint}>
-                {recurrenceLabel(recurrence)} · Tap date or time to change
-                schedule.
-              </Text>
+
               <View style={themeStyles.modalActions}>
                 <Pressable
                   style={themeStyles.modalSecondaryButton}
-                  onPress={() => setShowCalendarReminderModal(false)}
+                  onPress={cancelReminderEditor}
                 >
                   <Text style={themeStyles.modalSecondaryText}>CANCEL</Text>
                 </Pressable>
@@ -3450,13 +3093,14 @@ export default function App() {
                   onPress={() => void addReminder()}
                 >
                   <Text style={themeStyles.modalPrimaryText}>
-                    {saving ? "SAVING..." : "CREATE"}
+                    {saving ? "SAVING..." : "SAVE"}
                   </Text>
                 </Pressable>
               </View>
             </ScrollView>
           </View>
-        </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
       </Modal>
       <Modal
         visible={showScheduleModal}
@@ -3468,8 +3112,8 @@ export default function App() {
           setShowTimePicker(false);
         }}
       >
-        <View style={themeStyles.modalOverlay}>
-          <View style={themeStyles.scheduleModal}>
+        <SafeAreaView style={themeStyles.modalOverlay}>
+          <ScrollView style={[themeStyles.scheduleModal, { flexGrow: 0, maxHeight: "95%" }]} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 20 }}>
             <Text style={themeStyles.modalTitle}>SCHEDULE REMINDER</Text>
             <Text style={themeStyles.modalSubtitle}>
               Choose when it happens and how often it repeats.
@@ -3550,7 +3194,7 @@ export default function App() {
             )}
             <Text style={themeStyles.label}>REPEAT</Text>
             <View style={themeStyles.recurrenceRow}>
-              {(["daily", "weekly", "monthly", "yearly"] as Recurrence[]).map(
+              {(["once", "daily", "weekly", "selectedDays", "monthly", "yearly"] as Recurrence[]).map(
                 (option) => (
                   <Pressable
                     key={option}
@@ -3568,14 +3212,15 @@ export default function App() {
                           themeStyles.recurrenceTextActive,
                       ]}
                     >
-                      {option[0].toUpperCase() + option.slice(1)}
+                      {option === "selectedDays" ? "Selected Days" : option[0].toUpperCase() + option.slice(1)}
                     </Text>
                   </Pressable>
                 ),
               )}
             </View>
+            {recurrence === "selectedDays" && <WeekdaySelector value={weekdays} onChange={setWeekdays} light={isLightTheme} />}
             <Text style={themeStyles.repeatHint}>
-              {recurrence === "once"
+              {recurrence === "selectedDays" ? "Repeat on the selected weekdays." : recurrence === "once"
                 ? "One-time reminder by default. Select a repeat option to make it recurring."
                 : recurrence === "daily"
                   ? "Repeat every day at the selected time."
@@ -3607,8 +3252,8 @@ export default function App() {
                 <Text style={themeStyles.modalPrimaryText}>DONE</Text>
               </Pressable>
             </View>
-          </View>
-        </View>
+          </ScrollView>
+        </SafeAreaView>
       </Modal>
       {Platform.OS === "android" && showScheduleModal && showDatePicker && (
         <DateTimePicker
@@ -3656,6 +3301,7 @@ export default function App() {
         <Text style={themeStyles.footerText}>MATRIX · SIMPLE BY DESIGN</Text>
       </View>
     </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 const styles = StyleSheet.create({
@@ -3669,6 +3315,7 @@ const styles = StyleSheet.create({
   scheduleModal: {
     width: "100%",
     maxWidth: 520,
+    maxHeight: "95%",
     alignSelf: "center",
     backgroundColor: "#252D30",
     borderRadius: 18,
@@ -3693,7 +3340,8 @@ const styles = StyleSheet.create({
   modalSecondaryButton: {
     flex: 1,
     alignItems: "center",
-    paddingVertical: 13,
+    paddingVertical: 10,
+    minHeight: 48,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: "#3B484B",
@@ -3702,7 +3350,8 @@ const styles = StyleSheet.create({
   modalPrimaryButton: {
     flex: 1,
     alignItems: "center",
-    paddingVertical: 13,
+    paddingVertical: 10,
+    minHeight: 48,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: "#48D6C1",
@@ -3764,7 +3413,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 1.5,
-    marginBottom: 10,
+    marginBottom: 6,
     marginTop: 8,
   },
   menuItem: {
@@ -3900,7 +3549,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 13,
     padding: 15,
-    marginBottom: 10,
+    marginBottom: 6,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: "#354145",
@@ -3965,7 +3614,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 12,
-    marginBottom: 20,
+    marginBottom: 12,
   },
   backButton: {
     paddingHorizontal: 13,
@@ -4013,7 +3662,7 @@ const styles = StyleSheet.create({
     color: "#B6C7C5",
     fontSize: 14,
     marginTop: 7,
-    marginBottom: 20,
+    marginBottom: 12,
   },
   viewTabs: {
     flexDirection: "row",
@@ -4038,7 +3687,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 1.3,
-    marginBottom: 10,
+    marginBottom: 6,
   },
   form: {
     backgroundColor: "#252D30",
@@ -4053,7 +3702,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "800",
     letterSpacing: 1.5,
-    marginBottom: 20,
+    marginBottom: 12,
   },
   input: {
     backgroundColor: "#171C1E",
@@ -4061,15 +3710,16 @@ const styles = StyleSheet.create({
     borderColor: "#3B484B",
     borderRadius: 10,
     paddingHorizontal: 14,
-    paddingVertical: 13,
+    paddingVertical: 10,
+    minHeight: 48,
     color: "#FFFFFF",
     fontSize: 14,
-    marginBottom: 21,
+    marginBottom: 12,
   },
-  multilineInput: { minHeight: 88, lineHeight: 20 },
+  multilineInput: { minHeight: 56, lineHeight: 20 },
   noteBodyInput: { minHeight: 140, lineHeight: 21 },
   noteSearch: { marginTop: 18, marginBottom: 8 },
-  dateRow: { flexDirection: "row", gap: 10, marginBottom: 22 },
+  dateRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
   dateButton: {
     flex: 1,
     flexDirection: "row",
@@ -4089,7 +3739,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   dateValue: { color: "#FFFFFF", fontSize: 12, fontWeight: "600" },
-  recurrenceRow: { flexDirection: "row", gap: 7, marginBottom: 9 },
+  recurrenceRow: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 9 },
   recurrenceButton: {
     flex: 1,
     alignItems: "center",
@@ -4163,7 +3813,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#354145",
     padding: 14,
-    marginBottom: 10,
+    marginBottom: 6,
   },
   taskTopRow: { flexDirection: "row", alignItems: "center", gap: 9 },
   checkbox: {
@@ -4242,7 +3892,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#354145",
     padding: 15,
-    marginBottom: 10,
+    marginBottom: 6,
   },
   noteHeader: {
     flexDirection: "row",
@@ -4326,7 +3976,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     textAlign: "center",
     marginTop: 25,
-    marginBottom: 10,
+    marginBottom: 6,
   },
   settingRow: {
     flexDirection: "row",

@@ -1,0 +1,6 @@
+{
+  "android/src/main/java/expo/modules/alarm/AlarmSchedulerModule.kt": "9401971e20849505c675a3ebde7906a1313a02220aa5fcceb98462c2b5f1f1ac",
+  "android/src/main/java/expo/modules/alarm/AlarmSchedulerRingService.kt": "d3a374b8e893187a7560288934f7ec694895fcb85ff6e9aec21b145163092c3f",
+  "android/src/main/java/expo/modules/alarm/AlarmSchedulerRingActivity.kt": "825de215fbb09d687a464f4407355f77aaac2981262eed798990e4892fdd1ca7",
+  "android/src/main/java/expo/modules/alarm/MatrixFlipDetector.kt": "78f8ecc808fc6811dc5c21a9467cbba1fc3e9b1a79dace079b10911fb9af6bf1"
+}

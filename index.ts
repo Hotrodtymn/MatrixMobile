@@ -1,3 +1,4 @@
+import "./src/services/notificationTask";
 import { registerRootComponent } from 'expo';
 
 import App from './App';

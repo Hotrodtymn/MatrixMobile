@@ -1,0 +1,2 @@
+# Preserve patch formatting and source hashes on Windows checkouts.
+patches/*.patch text eol=lf -whitespace
