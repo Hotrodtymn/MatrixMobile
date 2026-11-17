@@ -1,3 +1,4 @@
+import { stopHeyMatrix } from "../../modules/hey-matrix";
 import React, { useEffect, useRef, useState } from "react";
 import { AppState, Linking, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -62,6 +63,8 @@ export function VoiceCommand({ light, disabled, onReview }: { light: boolean; di
     const token = ++generation.current;
     setBusy(true); setDenied(false); setText(''); finalText.current = '';
     try {
+      await stopHeyMatrix();
+      if (token !== generation.current) return;
       const permission = await speech.requestPermissionsAsync();
       if (token !== generation.current) return;
       if (!permission.granted) { setDenied(true); setStatus('Microphone permission denied. Allow it in Android app settings or type your command.'); setBusy(false); return; }

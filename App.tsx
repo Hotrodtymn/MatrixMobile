@@ -1,3 +1,4 @@
+import { HeyMatrixSettings } from "./src/components/HeyMatrixSettings";
 import { VoiceCommand } from "./src/components/VoiceCommand";
 import { TasksPage } from "./src/screens/TasksPage";
 import { supportsFlipToSilence, setFlipToSilence } from "./src/services/nativeAlarmSettings";
@@ -2181,6 +2182,7 @@ export default function App() {
             <Text style={themeStyles.description}>
               Personalize how Matrix looks and works.
             </Text>
+            <HeyMatrixSettings light={isLightTheme} />
             <Text style={themeStyles.sectionTitle}>APPEARANCE</Text>
             <View style={themeStyles.settingsCard}>
               <Text style={themeStyles.settingsTitle}>Theme</Text>

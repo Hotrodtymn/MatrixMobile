@@ -1,0 +1,10 @@
+{
+  "android/libs/sherpa-onnx-2.0.1.aar": "a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7",
+  "android/src/main/assets/hey-matrix/bpe.model": "c8a2a0129c4ab8e463164c142f82d25649661b122c8cd0b7aab5c9e80b90ad24",
+  "android/src/main/assets/hey-matrix/decoder-epoch-12-avg-2-chunk-16-left-64.onnx": "f61ebd3eed3773a44d088d53dfae92dbb6aec4839f4dcaee2d402414741663a3",
+  "android/src/main/assets/hey-matrix/encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx": "1e721676515bcd42a186979733981213c66c80db680e1cc582dfedf3be76e678",
+  "android/src/main/assets/hey-matrix/joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx": "eae9da0c7e1e6c6a3f4cc42d167899c388f6c6701b94cb96320e4f55df79624c",
+  "android/src/main/assets/hey-matrix/keywords.txt": "c7d3a4d2d3d82a87bc453e54c9e8881e0756445bf9081be5653af7fd35cabfcf",
+  "android/src/main/assets/hey-matrix/README.md": "74e42d37d63acd2366b042151d576fcc0c4917a41de339414a37f1e79f4e80e2",
+  "android/src/main/assets/hey-matrix/tokens.txt": "fd2ded4050a55d2b1578870ba8697d02371980217806b7558bd0a5cc60f3ba53"
+}

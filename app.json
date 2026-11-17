@@ -31,8 +31,9 @@
           "microphonePermission": "Allow Matrix to hear push-to-talk reminder commands.",
           "speechRecognitionPermission": "Allow Matrix to transcribe reminder commands."
         }
-      ]
+      ],
+      "./modules/hey-matrix/app.plugin.js"
     ],
-    "version": "1.2.0"
+    "version": "1.3.0"
   }
 }
