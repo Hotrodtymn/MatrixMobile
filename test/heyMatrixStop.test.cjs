@@ -21,3 +21,25 @@ test('unreleased microphone blocks handoff instead of starting a second capture'
 test('old APK without the native wake module preserves push-to-talk', async () => {
   await load(null).stopHeyMatrix();
 });
+
+test('permission-dialog focus delay is awaited before native start eligibility', async () => {
+  let polls = 0;
+  const api = load({ async canStartListening() { return ++polls === 3; } });
+  await api.waitForHeyMatrixFocus(() => true);
+  assert.equal(polls, 3);
+});
+test('backgrounding during the focus wait aborts user-started listening', async () => {
+  let polls = 0;
+  const api = load({ async canStartListening() { polls++; return false; } });
+  await assert.rejects(api.waitForHeyMatrixFocus(() => polls === 0), /Return to Matrix/);
+  assert.equal(polls, 1);
+});
+test('focus wait times out with actionable error instead of bypassing native guards', async () => {
+  let polls = 0;
+  const api = load({ async canStartListening() { polls++; return false; } });
+  await assert.rejects(api.waitForHeyMatrixFocus(() => true), /Close Android dialogs/);
+  assert.equal(polls, 20);
+});
+test('older APKs keep native start guards when focus diagnostic API is absent', async () => {
+  await load({}).waitForHeyMatrixFocus(() => true);
+});

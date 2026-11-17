@@ -1552,12 +1552,12 @@ export default function App() {
         >
           <Text style={themeStyles.logoText}>M</Text>
         </Pressable>
-        <VoiceCommand light={isLightTheme} disabled={loading || saving} onReview={(draft, transcript) => {
+        {!showHome && <VoiceCommand light={isLightTheme} disabled={loading || saving} onReview={(draft, transcript) => {
           setEditingReminderId(null); setDescription(""); setSubtaskDraft("");
           setRecurrence("once"); setWeekdays([]); setTitle(draft.title);
           setReminderDate(draft.date); setSelectedCalendarDate(draft.date);
           setVoiceTranscript(transcript); setShowCalendarReminderModal(true);
-        }} />
+        }} />}
         <View style={themeStyles.brandText}>
           <Text style={themeStyles.appName}>MATRIX</Text>
         </View>

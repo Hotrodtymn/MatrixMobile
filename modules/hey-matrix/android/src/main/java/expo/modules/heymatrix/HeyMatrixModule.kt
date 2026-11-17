@@ -13,6 +13,11 @@ class HeyMatrixModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("HeyMatrix")
     Function("getState") { HeyMatrixRuntime.snapshot() }
+    AsyncFunction("canStartListening") {
+      val activity = appContext.currentActivity
+      activity != null && !activity.isFinishing && !activity.isDestroyed && activity.hasWindowFocus()
+    }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
+    AsyncFunction("testTone") { HeyMatrixService.testTone() }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
     AsyncFunction("startListening") {
       check(Build.VERSION.SDK_INT >= 29) { "Hey Matrix requires Android 10 or newer; push-to-talk remains available." }
       check(!HeyMatrixRuntime.occupied) { "Hey Matrix is still active or releasing the microphone. Stop it before restarting." }
@@ -25,10 +30,12 @@ class HeyMatrixModule : Module() {
       check(manager.areNotificationsEnabled()) { "Enable Matrix notifications first." }
       check(manager.getNotificationChannel(HeyMatrixService.CHANNEL)?.importance != NotificationManager.IMPORTANCE_NONE) { "Enable the Hey Matrix notification channel first." }
       if (HeyMatrixRuntime.state == "stopped" || HeyMatrixRuntime.state == "error") {
+        HeyMatrixRuntime.diagnostics.begin()
+        HeyMatrixRuntime.log("start_requested visible_activity=true")
         HeyMatrixRuntime.occupied = true
         HeyMatrixRuntime.update("starting", "Starting on-device listening…")
         try { ContextCompat.startForegroundService(context, Intent(context, HeyMatrixService::class.java)) }
-        catch (error: Exception) { HeyMatrixRuntime.occupied = false; HeyMatrixRuntime.update("error", error.message ?: "Android blocked microphone service startup."); throw error }
+        catch (error: Exception) { HeyMatrixRuntime.diagnostics.error("START_BLOCKED"); HeyMatrixRuntime.log("service_start_blocked"); HeyMatrixRuntime.occupied = false; HeyMatrixRuntime.update("error", error.message ?: "Android blocked microphone service startup."); throw error }
       }
       HeyMatrixRuntime.snapshot()
     }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)

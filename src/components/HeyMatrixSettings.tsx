@@ -3,7 +3,7 @@ import { AppState, Linking, Platform, Pressable, Switch, Text, View } from 'reac
 import * as Notifications from 'expo-notifications';
 import { requireOptionalNativeModule } from 'expo';
 import type { ExpoSpeechRecognitionModule as SpeechModule } from 'expo-speech-recognition';
-import { heyMatrix, HeyMatrixState, stopHeyMatrix } from '../../modules/hey-matrix';
+import { heyMatrix, HeyMatrixState, stopHeyMatrix, waitForHeyMatrixFocus } from '../../modules/hey-matrix';
 import { taskTheme } from './tasks/taskTheme';
 const speech = requireOptionalNativeModule<typeof SpeechModule>('ExpoSpeechRecognition');
 export function HeyMatrixSettings({ light }: { light: boolean }) {
@@ -12,13 +12,18 @@ export function HeyMatrixSettings({ light }: { light: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
-    function refresh() { if (heyMatrix) setSnapshot(heyMatrix.getState()); }
+    function refresh() {
+      try { if (heyMatrix) setSnapshot(heyMatrix.getState()); }
+      catch { setError('Could not read native listening status. Restart Matrix and try again.'); }
+    }
     refresh();
     const timer = setInterval(refresh, 500);
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') refresh(); });
     return () => { clearInterval(timer); subscription.remove(); };
   }, []);
   const enabled = snapshot.occupied;
+  const d = snapshot.diagnostics;
+  const time = (value: number) => value ? new Date(value).toLocaleTimeString() : 'None this session';
   async function toggle(value: boolean) {
     if (!heyMatrix || busy) return;
     setBusy(true); setError('');
@@ -31,6 +36,7 @@ export function HeyMatrixSettings({ light }: { light: boolean }) {
         if (AppState.currentState !== 'active') throw new Error('Return to Matrix and enable listening again.');
         // Foreground STT and wake detection must never own the microphone together.
         speech.abort();
+        await waitForHeyMatrixFocus(() => AppState.currentState === 'active');
         setSnapshot(await heyMatrix.startListening());
       }
       setSnapshot(heyMatrix.getState());
@@ -43,6 +49,21 @@ export function HeyMatrixSettings({ light }: { light: boolean }) {
     <Switch accessibilityLabel="Hey Matrix listening" value={enabled} disabled={busy || !heyMatrix || Platform.OS !== 'android'} onValueChange={value => void toggle(value)} />
     <Text accessibilityLiveRegion="polite" style={{ color: c.text }}>{snapshot.state}: {snapshot.message}</Text>
     <Text style={{ color: c.muted }}>Wake detections this process: {snapshot.detections}</Text>
+    {d ? <View style={{ gap: 6 }}>
+      <Text style={{ color: c.text }}>Startup stage: {d.stage}</Text>
+      <Text style={{ color: c.muted }}>Service: {d.serviceStarted ? 'started' : 'not running'} · Model: {d.modelLoaded ? 'loaded' : 'not loaded'} · Microphone: {d.microphoneActive ? 'active' : 'inactive'}</Text>
+      <Text style={{ color: c.muted }}>Captured samples: {d.samplesRead} · Decode steps: {d.decodeSteps}</Text>
+      <Text style={{ color: c.muted }}>Nonzero input observed: {d.inputObserved ? 'yes (not proof of intelligible speech)' : 'no'} · Last capture: {time(d.lastAudioAt)}</Text>
+      <Text style={{ color: c.muted }}>Last wake detection: {time(d.lastDetectionAt)}</Text>
+      <Text style={{ color: c.muted }}>Acknowledgment: {d.toneStatus}</Text>
+      {!!d.lastErrorCode && <Text style={{ color: c.error }}>Error code: {d.lastErrorCode}</Text>}
+    </View> : heyMatrix ? <Text style={{ color: c.muted }}>Detailed diagnostics require the updated APK.</Text> : null}
+    <Text style={{ color: c.muted }}>If Service is not started, enable listening while Matrix is open. If capture stays at zero, check microphone permission and the Android microphone privacy switch. If detections increase without a tone, raise media volume and test the tone. A loaded model alone does not prove wake detection.</Text>
+    {!!heyMatrix?.testTone && <Pressable accessibilityRole="button" disabled={!enabled || busy} style={{ minHeight: 48, justifyContent: 'center', opacity: enabled ? 1 : 0.5 }} onPress={() => {
+      const native = heyMatrix;
+      if (!native?.testTone) return;
+      void native.testTone().then(() => setSnapshot(native.getState())).catch(() => setError('Could not test acknowledgment. Enable listening and check Android media volume.'));
+    }}><Text style={{ color: c.accent }}>Test acknowledgment tone</Text></Pressable>}
     {!heyMatrix && <Text style={{ color: c.muted }}>Install the new Android APK to enable Hey Matrix.</Text>}
     {!!error && <Text accessibilityRole="alert" style={{ color: c.error }}>{error}</Text>}
     <Pressable accessibilityRole="button" onPress={() => { void Linking.openSettings().catch(() => setError('Open Android Settings → Apps → Matrix manually.')); }} style={{ minHeight: 48, justifyContent: 'center' }}><Text style={{ color: c.accent }}>Open Android app settings</Text></Pressable>
