@@ -1,16 +1,23 @@
+import type { VoiceRequest } from '../../src/services/voiceReminderSession';
 import { NativeModule, requireOptionalNativeModule } from 'expo';
 export type HeyMatrixDiagnostics = {
   stage: string; serviceStarted: boolean; modelLoaded: boolean; microphoneActive: boolean;
   samplesRead: number; decodeSteps: number; inputObserved: boolean; lastAudioAt: number;
   lastDetectionAt: number; toneStatus: string; lastErrorCode: string;
 };
-export type HeyMatrixState = { state: 'stopped' | 'starting' | 'listening' | 'cooldown' | 'stopping' | 'error'; message: string; detections: number; occupied: boolean; diagnostics?: HeyMatrixDiagnostics };
+export type HeyMatrixState = { state: 'stopped' | 'starting' | 'listening' | 'cooldown' | 'stopping' | 'error'; message: string; detections: number; occupied: boolean; diagnostics?: HeyMatrixDiagnostics; voicePhase?: string; voiceStatus?: string };
 declare class HeyMatrixNative extends NativeModule {
   getState(): HeyMatrixState;
   startListening(): Promise<HeyMatrixState>;
   stopListening(): Promise<void>;
   canStartListening?(): Promise<boolean>;
   testTone?(): Promise<void>;
+  setHostReady?(ready: boolean): Promise<void>;
+  takeVoiceRequest?(): Promise<VoiceRequest | null>;
+  parsedReminder?(id: string, title: string, date: string, readback: string): Promise<void>;
+  rejectVoiceCommand?(id: string): Promise<void>;
+  isSaveAuthorized?(id: string): Promise<boolean>;
+  voiceSaved?(id: string, ok: boolean): Promise<void>;
 }
 export const heyMatrix = requireOptionalNativeModule<HeyMatrixNative>('HeyMatrix');
 export async function stopHeyMatrix(): Promise<void> {

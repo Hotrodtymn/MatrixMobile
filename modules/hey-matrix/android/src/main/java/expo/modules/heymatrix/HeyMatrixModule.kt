@@ -13,6 +13,27 @@ class HeyMatrixModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("HeyMatrix")
     Function("getState") { HeyMatrixRuntime.snapshot() }
+    OnActivityEntersBackground {
+      VoiceCommandCycle.hostReady = false
+      VoiceCommandCycle.active?.checkHost()
+    }
+    OnDestroy {
+      VoiceCommandCycle.hostReady = false
+      VoiceCommandCycle.active?.checkHost()
+    }
+    AsyncFunction("setHostReady") { ready: Boolean ->
+      val activity = appContext.currentActivity
+      VoiceCommandCycle.hostReady = ready && activity != null && !activity.isFinishing && activity.hasWindowFocus()
+      VoiceCommandCycle.heartbeat = android.os.SystemClock.elapsedRealtime()
+      VoiceCommandCycle.active?.checkHost()
+    }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
+    AsyncFunction("takeVoiceRequest") { VoiceCommandCycle.active?.takeRequest() }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
+    AsyncFunction("parsedReminder") { id: String, title: String, date: String, readback: String ->
+      VoiceCommandCycle.active?.parsed(id, title, date, readback)
+    }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
+    AsyncFunction("rejectVoiceCommand") { id: String -> VoiceCommandCycle.active?.reject(id) }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
+    AsyncFunction("isSaveAuthorized") { id: String -> VoiceCommandCycle.active?.authorized(id) == true }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
+    AsyncFunction("voiceSaved") { id: String, ok: Boolean -> VoiceCommandCycle.active?.saved(id, ok) }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
     AsyncFunction("canStartListening") {
       val activity = appContext.currentActivity
       activity != null && !activity.isFinishing && !activity.isDestroyed && activity.hasWindowFocus()

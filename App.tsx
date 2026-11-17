@@ -1,3 +1,4 @@
+import { useHeyMatrixCommands } from "./src/hooks/useHeyMatrixCommands";
 import { HeyMatrixSettings } from "./src/components/HeyMatrixSettings";
 import { VoiceCommand } from "./src/components/VoiceCommand";
 import { TasksPage } from "./src/screens/TasksPage";
@@ -26,7 +27,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Notifications from "expo-notifications";
 import * as IntentLauncher from "expo-intent-launcher";
 import AlarmScheduler from "react-native-alarm-scheduler";
-import { refreshLegacyNotificationText, mergeReminderChanges, STORAGE_KEY, NOTES_KEY, SETTINGS_KEY, ALARMS_KEY, NOTIFICATION_CATEGORY, Recurrence, AppView, MatrixAlarm, ClockTab, AppSettings, DEFAULT_SETTINGS, Subtask, Reminder, Note, NOTIFICATION_ACTIONS, serializeReminderMutation, cancelReminderNotifications, reminderContent, scheduleReminder, homeReminderVisible, homeAlarmVisible, handleNotificationResponse, getRecurrence, getTaskDate, isToday, getReminderOccurrenceDate, formatDate, formatTime, recurrenceLabel, buildTrigger } from "./src/services/reminders";
+import { commitReminder, refreshLegacyNotificationText, mergeReminderChanges, STORAGE_KEY, NOTES_KEY, SETTINGS_KEY, ALARMS_KEY, NOTIFICATION_CATEGORY, Recurrence, AppView, MatrixAlarm, ClockTab, AppSettings, DEFAULT_SETTINGS, Subtask, Reminder, Note, NOTIFICATION_ACTIONS, serializeReminderMutation, cancelReminderNotifications, reminderContent, scheduleReminder, homeReminderVisible, homeAlarmVisible, handleNotificationResponse, getRecurrence, getTaskDate, isToday, getReminderOccurrenceDate, formatDate, formatTime, recurrenceLabel, buildTrigger } from "./src/services/reminders";
 function getDefaultReminderDate() {
   const date = new Date();
   date.setSeconds(0, 0);
@@ -105,6 +106,7 @@ export default function App() {
   const [stopwatchElapsed, setStopwatchElapsed] = useState(0);
   const [expandedNotes, setExpandedNotes] = useState<string[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  useHeyMatrixCommands(setReminders);
   const systemColorScheme = useColorScheme();
   const isLightTheme =
     settings.theme === "light" ||
@@ -958,8 +960,6 @@ export default function App() {
       Alert.alert("Choose days", "Select at least one weekday."); return false;
     }
     setSaving(true);
-    let notificationIds: string[] = [];
-    let notificationId: string | undefined;
     try {
       let granted = settings.notificationsEnabled;
       if (settings.notificationsEnabled) {
@@ -978,11 +978,6 @@ export default function App() {
       }
       const taskId = editingReminderId || `${Date.now()}-${Math.random()}`;
       const existing = reminders.find(item => item.id === editingReminderId);
-      notificationIds = settings.notificationsEnabled ? await scheduleReminder({
-        id: taskId, title: cleanTitle, description: description.trim(), date: reminderDate.toISOString(),
-        recurrence, weekdays, notificationId: "",
-      }) : [];
-      notificationId = notificationIds[0] || "";
       const subtasks: Subtask[] = subtaskDraft
         .split("\n")
         .map((item) => item.trim())
@@ -998,8 +993,7 @@ export default function App() {
         title: cleanTitle,
         description: description.trim(),
         date: reminderDate.toISOString(),
-        notificationId,
-        notificationIds,
+        notificationId: "",
         weekdays,
         completedThrough: undefined,
         snoozedUntil: undefined,
@@ -1008,13 +1002,9 @@ export default function App() {
         starred: existing?.starred ?? false,
         subtasks: existing && subtaskDraft === (existing.subtasks ?? []).map(item => item.title).join("\n") ? existing.subtasks : subtasks,
       };
-      await saveReminders(existing ? reminders.map(item => item.id === existing.id ? newReminder : item) : [newReminder, ...reminders]);
-      if (existing) {
-        await cancelReminderNotifications(existing.id, existing.notificationId, notificationIds).catch(error => {
-          console.error("Reminder saved but old alerts could not be cancelled:", error);
-          Alert.alert("Reminder saved", "Some previous alerts could not be cancelled. Reopen the reminder and save again to retry.");
-        });
-      }
+      const result = await commitReminder(newReminder, { base: reminders, notificationsEnabled: settings.notificationsEnabled });
+      setReminders(result.records);
+      if (result.cleanupFailed) Alert.alert("Reminder saved", "Some previous alerts could not be cancelled. Reopen the reminder and save again to retry.");
       // Selected-day requests must all survive replacement cleanup.
       setVoiceTranscript("");
       setEditingReminderId(null);
@@ -1029,7 +1019,6 @@ export default function App() {
       return true;
     } catch (error) {
       console.error("Could not create task:", error);
-      await Promise.all(notificationIds.map(id => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
       Alert.alert("Couldn't save reminder", "Please try again.");
       return false;
     } finally {

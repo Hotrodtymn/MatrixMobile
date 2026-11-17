@@ -9,6 +9,10 @@ module.exports = function withHeyMatrix(config) {
   ]);
   return withAndroidManifest(config, mod => {
     const app = AndroidConfig.Manifest.getMainApplicationOrThrow(mod.modResults);
+    const queries = mod.modResults.manifest.queries ??= [];
+    if (!queries.some(q => q.intent?.some(i => i.action?.some(a => a.$['android:name'] === 'android.intent.action.TTS_SERVICE')))) {
+      queries.push({ intent: [{ action: [{ $: { 'android:name': 'android.intent.action.TTS_SERVICE' } }] }] });
+    }
     app.service = (app.service || []).filter(x => x.$['android:name'] !== SERVICE);
     app.service.push({ $: { 'android:name': SERVICE, 'android:exported': 'false',
       'android:foregroundServiceType': 'microphone', 'android:stopWithTask': 'false' } });

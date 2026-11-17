@@ -412,3 +412,40 @@ export async function refreshLegacyNotificationText(reminders: Reminder[]) {
     });
   }
 }
+
+// Shared commit path for the editor and explicitly confirmed voice proposals.
+export async function commitReminder(draft: Reminder, options: {
+  base?: Reminder[]; notificationsEnabled: boolean; authorized?: () => Promise<boolean>;
+}): Promise<{ records: Reminder[]; cleanupFailed: boolean }> {
+  return serializeReminderMutation(async () => {
+    const authorize = options.authorized ?? (async () => true);
+    const valid = async () => {
+      if (!await authorize()) throw new Error('Reminder confirmation expired or was cancelled.');
+      if (!draft.title.trim() || draft.title.trim().length > 150 || !Number.isFinite(Date.parse(draft.date)) || Date.parse(draft.date) <= Date.now()) throw new Error('Reminder needs a valid title and future time.');
+      if (draft.recurrence === 'selectedDays' && !draft.weekdays?.length) throw new Error('Select reminder weekdays.');
+    };
+    await valid();
+    const latest: Reminder[] = JSON.parse(await AsyncStorage.getItem(STORAGE_KEY) || '[]');
+    const base = options.base ?? latest;
+    const editing = base.some(item => item.id === draft.id);
+    const previous = latest.find(item => item.id === draft.id);
+    // Voice session IDs are stable: a repeated confirmed save cannot duplicate it.
+    if (!editing && previous) return { records: latest, cleanupFailed: false };
+    if (editing && !previous) throw new Error('This reminder was deleted.');
+    let ids: string[] = [];
+    try {
+      ids = options.notificationsEnabled ? await scheduleReminder(draft) : [];
+      await valid(); // Recheck cancellation/lock/background and time after scheduling.
+      const saved = { ...draft, title: draft.title.trim(), notificationId: ids[0] || '', notificationIds: ids };
+      const desired = editing ? base.map(item => item.id === saved.id ? saved : item) : [saved, ...base];
+      const records = mergeReminderChanges(base, desired, latest);
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+      let cleanupFailed = false;
+      if (previous) await cancelReminderNotifications(previous.id, previous.notificationId, ids).catch(() => { cleanupFailed = true; });
+      return { records, cleanupFailed };
+    } catch (error) {
+      await Promise.all(ids.map(id => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+      throw error;
+    }
+  });
+}

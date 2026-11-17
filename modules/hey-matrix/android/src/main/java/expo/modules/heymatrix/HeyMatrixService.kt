@@ -22,10 +22,12 @@ object HeyMatrixRuntime {
   private var message = "Hey Matrix is off."
   private var detections = 0
   val diagnostics = WakeDiagnostics()
+  @Volatile var voicePhase = VoicePhase.PASSIVE_WAKE.name
+  @Volatile var voiceStatus = "Commands require Matrix visible and unlocked."
   fun log(event: String) { Log.i("HeyMatrix", event) }
   @Synchronized fun update(value: String, detail: String) { state = value; message = detail }
   @Synchronized fun detected() { detections++; diagnostics.detected(System.currentTimeMillis()); log("wake_detected") }
-  @Synchronized fun snapshot(): Map<String, Any> = mapOf("state" to state, "message" to message, "detections" to detections, "occupied" to occupied, "diagnostics" to diagnostics.snapshot())
+  @Synchronized fun snapshot(): Map<String, Any> = mapOf("state" to state, "message" to message, "detections" to detections, "occupied" to occupied, "diagnostics" to diagnostics.snapshot(), "voicePhase" to voicePhase, "voiceStatus" to voiceStatus)
 }
 
 class StopListeningReceiver : BroadcastReceiver() {
@@ -39,7 +41,7 @@ class HeyMatrixService : Service() {
     private var activeInstance: HeyMatrixService? = null
     fun testTone() {
       val service = activeInstance ?: error("Enable Hey Matrix before testing the tone.")
-      check(service.running) { "Hey Matrix is not running." }
+      check(service.running && VoiceCommandCycle.active == null) { "Test tone is available only during passive wake monitoring." }
       service.acknowledge()
     }
     fun stop(context: Context) {
@@ -63,6 +65,8 @@ class HeyMatrixService : Service() {
   private val healthCheck = object : Runnable {
     override fun run() {
       if (!running) return
+      VoiceCommandCycle.active?.checkHost()
+      if (VoiceCommandCycle.active != null) getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification("Voice reminder: " + HeyMatrixRuntime.voicePhase))
       val manager = getSystemService(NotificationManager::class.java)
       if (ContextCompat.checkSelfPermission(this@HeyMatrixService, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ||
         !manager.areNotificationsEnabled() || manager.getNotificationChannel(CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) {
@@ -79,7 +83,7 @@ class HeyMatrixService : Service() {
   }
   private val recordingCallback = object : AudioManager.AudioRecordingCallback() {
     override fun onRecordingConfigChanged(configs: MutableList<AudioRecordingConfiguration>) {
-      if (Build.VERSION.SDK_INT >= 29 && configs.any { it.isClientSilenced }) fail("Microphone interrupted by Android or another app. Open Matrix to restart.", "MIC_SILENCED")
+      if (recorder != null && Build.VERSION.SDK_INT >= 29 && configs.any { it.isClientSilenced }) fail("Microphone interrupted by Android or another app. Open Matrix to restart.", "MIC_SILENCED")
     }
   }
   private val playbackCallback = object : AudioManager.AudioPlaybackCallback() {
@@ -112,9 +116,15 @@ class HeyMatrixService : Service() {
       HeyMatrixRuntime.log("service_foreground_started")
       main.post(healthCheck)
       audio.registerAudioPlaybackCallback(playbackCallback, main)
-      worker = thread(name = "HeyMatrixAudio") { listen() }
+      startPassive()
     } catch (error: Exception) { fail(error.message ?: "Android blocked microphone startup.") }
     return START_NOT_STICKY
+  }
+  private fun startPassive() {
+    if (!running || destroyed) return
+    cleanedUp = false; cleanupDelivered = false
+    HeyMatrixRuntime.voicePhase = VoicePhase.PASSIVE_WAKE.name
+    worker = thread(name = "HeyMatrixAudio") { listen() }
   }
   private fun notification(detail: String): Notification {
     val open = packageManager.getLaunchIntentForPackage(packageName)!!.apply { addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP) }
@@ -140,6 +150,7 @@ class HeyMatrixService : Service() {
     var kws: KeywordSpotter? = null
     var stream: OnlineStream? = null
     var localRecorder: AudioRecord? = null
+    var handoff = false
     try {
       HeyMatrixRuntime.diagnostics.stage("checking_assets")
       WakeModel.verifyAssets(assets)
@@ -197,6 +208,12 @@ class HeyMatrixService : Service() {
             kws.reset(stream)
             if (policy.accept(SystemClock.elapsedRealtime())) {
               HeyMatrixRuntime.detected()
+              if (VoiceCommandCycle.foregroundAllowed(this)) {
+                handoff = true
+                HeyMatrixRuntime.voiceStatus = "Releasing wake microphone before command capture"
+                return // finally releases AudioRecord/model before speech starts.
+              }
+              HeyMatrixRuntime.voiceStatus = "Wake detected. Open and unlock Matrix for hands-free commands; background capture is deferred."
               HeyMatrixRuntime.diagnostics.stage("cooldown")
               publish("cooldown", "Heard Hey Matrix — cooldown")
               main.post { if (running) acknowledge() }
@@ -232,24 +249,29 @@ class HeyMatrixService : Service() {
         if (destroyed) {
           HeyMatrixRuntime.occupied = false
           if (!terminalError) HeyMatrixRuntime.update("stopped", "Hey Matrix is off.")
+        } else if (handoff && running && !terminalError) {
+          worker = null
+          if (running && !destroyed) VoiceCommandCycle(this, { acknowledge() }) { startPassive() }.start()
         } else stopSelf()
       }
     }
   }
-  private fun acknowledge() {
-    if (focusRequest != null) return // Do not overlap diagnostic or wake acknowledgments.
+  private fun acknowledge(): Boolean {
+    if (focusRequest != null) return false // Do not overlap diagnostic or wake acknowledgments.
     if (audio.getStreamVolume(AudioManager.STREAM_MUSIC) == 0) {
       HeyMatrixRuntime.diagnostics.tone("Muted: raise Android media volume")
       HeyMatrixRuntime.log("tone_muted")
-      return
+      return false
     }
     val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
     focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK).setAudioAttributes(attributes).setOnAudioFocusChangeListener(focusListener).build()
     val granted = audio.requestAudioFocus(focusRequest!!) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    var played = false
     if (granted) {
       runCatching {
         tone = ToneGenerator(AudioManager.STREAM_MUSIC, 45)
         val started = tone?.startTone(ToneGenerator.TONE_PROP_ACK, 160) == true
+        played = started
         HeyMatrixRuntime.diagnostics.tone(if (started) "Playback requested (not proof of audibility)" else "Tone playback rejected")
         HeyMatrixRuntime.log(if (started) "tone_requested" else "tone_rejected")
       }.onFailure {
@@ -262,6 +284,7 @@ class HeyMatrixService : Service() {
       HeyMatrixRuntime.log("tone_focus_denied")
     }
     main.postDelayed({ tone?.release(); tone = null; focusRequest?.let { audio.abandonAudioFocusRequest(it) }; focusRequest = null }, 250)
+    return played
   }
   private fun fail(detail: String, code: String = "INTERRUPTED") {
     main.post {
@@ -272,6 +295,7 @@ class HeyMatrixService : Service() {
   }
   override fun onDestroy() {
     destroyed = true
+    VoiceCommandCycle.active?.dispose()
     if (activeInstance === this) activeInstance = null
     HeyMatrixRuntime.diagnostics.stopped()
     HeyMatrixRuntime.log("service_destroyed")

@@ -18,7 +18,7 @@ function harness(storage = new Map()) {
   const code = ts.transpileModule(fs.readFileSync('src/services/reminders.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText;
   vm.runInNewContext(code, { exports, Date, Set, Promise, console, require(name) { return name === 'expo-notifications' ? notifications : name === 'react-native' ? { Platform: { OS: 'android' } } : { default: asyncStorage, __esModule: true }; } });
   const read = () => JSON.parse(storage.get('matrix.reminders.v1'));
-  return { api: exports, storage, scheduled, read };
+  return { api: exports, storage, scheduled, read, asyncStorage };
 }
 const reminder = { id: 'r', title: 'Medication', description: 'After dinner', notificationId: 'daily-r', date: new Date().toISOString(), recurrence: 'daily' };
 const response = action => ({ actionIdentifier: action, notification: { date: 1234, request: { identifier: 'daily-r', content: { data: { reminderId: 'r' } } } } });
@@ -107,4 +107,44 @@ test('legacy defaults and unrelated stored data survive actions', async () => {
  assert.equal(storage.get('matrix.alarms.v1'), '[{"id":"alarm"}]');
  assert.equal(storage.get('matrix.settings.v1'), '{"theme":"dark"}');
  assert.equal(h.api.reminderContent(oldReminder).body, undefined);
+});
+
+const futureDraft = id => ({ id, title: 'Call Mom', date: new Date(Date.now()+86400000).toISOString(), notificationId: '', recurrence: 'once' });
+test('shared manual/voice commit schedules and persists once for a stable confirmed session', async () => {
+ const h = harness();
+ const draft = futureDraft('voice-session');
+ await h.api.commitReminder(draft, { base: [], notificationsEnabled: true, authorized: async () => true });
+ await h.api.commitReminder(draft, { base: [], notificationsEnabled: true, authorized: async () => true });
+ assert.equal(h.read().length, 1); assert.equal(h.scheduled.size, 1);
+ assert.equal(h.read()[0].title, 'Call Mom'); assert.ok(h.read()[0].notificationId);
+});
+test('revoked confirmation after scheduling rolls back alerts and writes nothing', async () => {
+ const h = harness(); let checks = 0;
+ await assert.rejects(h.api.commitReminder(futureDraft('cancelled'), { base: [], notificationsEnabled: true, authorized: async () => ++checks === 1 }), /cancelled/);
+ assert.equal(h.scheduled.size, 0); assert.equal(h.storage.has('matrix.reminders.v1'), false);
+});
+test('shared commit preserves unrelated reminders, notes and alarms and edits without duplicate alerts', async () => {
+ const h = harness(new Map([['matrix.reminders.v1', JSON.stringify([reminder])], ['matrix.notes.v1','keep-notes'], ['matrix.alarms.v1','keep-alarms']]));
+ const a = await h.api.commitReminder(futureDraft('new'), { base: [reminder], notificationsEnabled: true });
+ assert.equal(a.records.length, 2);
+ await h.api.commitReminder({ ...a.records[0], title: 'Updated title' }, { base: a.records, notificationsEnabled: true });
+ assert.equal(h.scheduled.size,1); assert.equal(h.read().length,2); assert.equal(h.read()[0].title,'Updated title');
+ assert.equal(h.storage.get('matrix.notes.v1'),'keep-notes'); assert.equal(h.storage.get('matrix.alarms.v1'),'keep-alarms');
+});
+test('invalid or already deleted reminder cannot be scheduled through the shared path', async () => {
+ const h = harness();
+ await assert.rejects(h.api.commitReminder({ ...futureDraft('bad'), date:'invalid' }, { base: [], notificationsEnabled:true }), /future time/);
+ const draft = futureDraft('deleted');
+ await assert.rejects(h.api.commitReminder(draft, { base: [draft], notificationsEnabled:true }), /deleted/);
+ assert.equal(h.scheduled.size,0);
+});
+test('persistence failure rolls back scheduled reminders and queue remains usable', async () => {
+ const h = harness(new Map([['matrix.reminders.v1', '[]']]));
+ const write = h.asyncStorage.setItem;
+ h.asyncStorage.setItem = async () => { throw Error('disk write failed'); };
+ await assert.rejects(h.api.commitReminder(futureDraft('bad'), { base:[], notificationsEnabled:true }), /disk write failed/);
+ assert.equal(h.scheduled.size,0); assert.equal(h.storage.get('matrix.reminders.v1'),'[]');
+ h.asyncStorage.setItem = write;
+ await h.api.commitReminder(futureDraft('good'), { base:[], notificationsEnabled:false });
+ assert.equal(h.read().length,1); assert.equal(h.scheduled.size,0);
 });

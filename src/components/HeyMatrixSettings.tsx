@@ -45,9 +45,11 @@ export function HeyMatrixSettings({ light }: { light: boolean }) {
   }
   return <View style={{ backgroundColor: c.surface, borderColor: c.border, borderWidth: 1, borderRadius: 12, padding: 16, gap: 10, marginVertical: 12 }}>
     <Text style={{ color: c.text, fontWeight: '700' }}>Hey Matrix (experimental)</Text>
-    <Text style={{ color: c.muted }}>Listen on device for “Hey Matrix” and play a short tone. Uses the microphone and extra battery while your screen is locked. No audio is saved and no commands are executed. Listening must be enabled again after the service stops.</Text>
+    <Text style={{ color: c.muted }}>Listen on device for “Hey Matrix” and play a short tone. Uses the microphone and extra battery while your screen is locked. No audio is saved. While Matrix is visible and unlocked, speak a reminder after the tone, hear its readback, then say yes to save or no to cancel. Background and locked-screen command capture are deferred. Listening must be enabled again after the service stops.</Text>
     <Switch accessibilityLabel="Hey Matrix listening" value={enabled} disabled={busy || !heyMatrix || Platform.OS !== 'android'} onValueChange={value => void toggle(value)} />
     <Text accessibilityLiveRegion="polite" style={{ color: c.text }}>{snapshot.state}: {snapshot.message}</Text>
+    <Text accessibilityLiveRegion="polite" style={{ color: c.text }}>Voice phase: {snapshot.voicePhase ?? 'Requires updated APK'}</Text>
+    <Text style={{ color: c.muted }}>{snapshot.voiceStatus ?? 'Install the updated APK for hands-free reminders.'}</Text>
     <Text style={{ color: c.muted }}>Wake detections this process: {snapshot.detections}</Text>
     {d ? <View style={{ gap: 6 }}>
       <Text style={{ color: c.text }}>Startup stage: {d.stage}</Text>

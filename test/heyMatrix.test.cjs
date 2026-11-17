@@ -5,11 +5,13 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getConfig } = require('expo/config');
 const { compileModsAsync } = require('expo/config-plugins');
+const withHeyMatrix = require('../modules/hey-matrix/app.plugin');
 test('native config keeps wake service private, typed, stoppable and separate from alarm setup', async () => {
   const { exp } = getConfig(process.cwd());
-  const result = await compileModsAsync(exp, { projectRoot: process.cwd(), platforms: ['android'], introspect: true });
+  const result = await compileModsAsync(withHeyMatrix(exp), { projectRoot: process.cwd(), platforms: ['android'], introspect: true });
   const manifest = result._internal.modResults.android.manifest.manifest;
   const app = manifest.application[0];
+  assert.ok(manifest.queries.some(q => q.intent?.some(i => i.action?.some(a => a.$['android:name'] === 'android.intent.action.TTS_SERVICE'))));
   const service = app.service.filter(s => s.$['android:name'] === 'expo.modules.heymatrix.HeyMatrixService');
   assert.equal(service.length, 1);
   assert.equal(service[0].$['android:foregroundServiceType'], 'microphone');
