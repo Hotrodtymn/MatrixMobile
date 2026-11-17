@@ -6,8 +6,11 @@ group = 'expo.modules.heymatrix'
 version = '0.1.0'
 android {
   namespace 'expo.modules.heymatrix'
-  defaultConfig { versionCode 1; versionName '0.1.0' }
-  consumerProguardFiles 'consumer-rules.pro'
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+    consumerProguardFiles 'consumer-rules.pro'
+  }
 }
 // Named flat-directory dependency avoids embedding a direct AAR file dependency in a library.
 rootProject.allprojects {
