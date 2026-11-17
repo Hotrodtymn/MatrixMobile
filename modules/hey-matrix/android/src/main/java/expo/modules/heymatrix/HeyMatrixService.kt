@@ -237,7 +237,27 @@ class HeyMatrixService : Service() {
       }
     } finally {
       if (Build.VERSION.SDK_INT >= 29) runCatching { localRecorder?.unregisterAudioRecordingCallback(recordingCallback) }
-      runCatching { localRecorder?.stop() }; runCatching { localRecorder?.release() }; recorder = null
+      val released = synchronized(captureLock) {
+        val ok = WakeMicrophoneRelease.perform({ localRecorder?.stop() }, {
+          try { localRecorder?.release() }
+          catch (failure: Exception) {
+            HeyMatrixRuntime.diagnostics.voiceFailure("wake_microphone_release", VoicePhase.PASSIVE_WAKE.name,
+              "WAKE_MIC_RELEASE_FAILED", -1, failure.javaClass.simpleName,
+              "Wake microphone could not be released. Force-stop and reopen Matrix.", false)
+            HeyMatrixRuntime.log("wake_release_exception exception_type=${failure.javaClass.simpleName}")
+            throw failure
+          }
+        })
+        if (ok) recorder = null
+        ok
+      }
+      if (released) {
+        HeyMatrixRuntime.diagnostics.wakeReleased(System.currentTimeMillis())
+        HeyMatrixRuntime.log("wake_microphone_release_complete")
+      } else {
+        handoff = false
+        fail("Wake microphone release failed. Recognition was not started; force-stop and reopen Matrix.", "WAKE_MIC_RELEASE_FAILED")
+      }
       runCatching { stream?.release() }; runCatching { kws?.release() }
       runCatching { wakeLock?.let { if (it.isHeld) it.release() } }; wakeLock = null
       HeyMatrixRuntime.diagnostics.microphone(false)
@@ -247,11 +267,13 @@ class HeyMatrixService : Service() {
       main.post {
         cleanupDelivered = true
         if (destroyed) {
-          HeyMatrixRuntime.occupied = false
+          HeyMatrixRuntime.occupied = recorder != null || VoiceCommandCycle.microphoneBlocked
           if (!terminalError) HeyMatrixRuntime.update("stopped", "Hey Matrix is off.")
         } else if (handoff && running && !terminalError) {
           worker = null
-          if (running && !destroyed) VoiceCommandCycle(this, { acknowledge() }) { startPassive() }.start()
+          if (running && !destroyed) VoiceCommandCycle(this, { recorder == null && worker == null && cleanedUp }, { acknowledge() }) { released ->
+            if (released) startPassive() else fail("Recognition microphone cleanup failed. Restart Matrix before listening again.", "SR_CLEANUP_EXCEPTION")
+          }.start()
         } else stopSelf()
       }
     }
@@ -309,7 +331,7 @@ class HeyMatrixService : Service() {
     tone?.release(); tone = null
     focusRequest?.let { audio.abandonAudioFocusRequest(it) }; focusRequest = null
     if (worker == null || (cleanedUp && cleanupDelivered)) {
-      HeyMatrixRuntime.occupied = false
+      HeyMatrixRuntime.occupied = recorder != null || VoiceCommandCycle.microphoneBlocked
       if (!terminalError) HeyMatrixRuntime.update("stopped", "Hey Matrix is off.")
     } else if (!terminalError) HeyMatrixRuntime.update("stopping", "Releasing microphone…")
     stopForeground(STOP_FOREGROUND_REMOVE)

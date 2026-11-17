@@ -11,11 +11,11 @@ function load(file, requireFn) {
 const parser = load('src/services/voiceCommand.ts');
 const { createVoiceReminderHandler } = load('src/services/voiceReminderSession.ts', () => parser);
 function harness() {
- const h = { proposal:null, readback:'', saves:0, responses:[], allowed:true, reject:0, fail:false };
+ const h = { proposal:null, readback:'', saves:0, responses:[], allowed:true, reject:0, rejections:[], fail:false };
  h.handle = createVoiceReminderHandler({
   async authorized() { return h.allowed; },
   async parsed(id,title,date,readback) { h.proposal = { id, title, date }; h.readback=readback; },
-  async rejected() { h.reject++; },
+  async rejected(id, reason) { h.reject++; h.rejections.push(reason); },
   async saved(id,ok) { h.responses.push(ok); },
   async save() { if(h.fail) throw Error('storage failure'); h.saves++; },
  });
@@ -43,4 +43,18 @@ test('duplicate confirmation cannot save twice and failed persistence never repo
 test('a new command invalidates the old unconfirmed proposal', async () => {
  const h=harness(); await h.handle(command);const old={...h.proposal,kind:'save'};
  await h.handle({...command,id:'new-session'}); await h.handle(old);assert.equal(h.saves,0);
+});
+
+test('alarm requests get an explicit unsupported reason and never create a reminder', async () => {
+ for (const text of ['Set an alarm for 7 AM', 'Please create an alarm tomorrow at 8 AM', 'Wake me tomorrow at 7 AM']) {
+  const h=harness(); await h.handle({...command,text});
+  assert.deepEqual(h.rejections,['UNSUPPORTED_ALARM']); assert.equal(h.proposal,null); assert.equal(h.saves,0);
+  await h.handle({id:command.id,kind:'save',title:'alarm',date:'2028-01-01'});assert.equal(h.saves,0);
+ }
+});
+test('ambiguous reminder differs from alarm rejection; mentioning alarm in a reminder title stays a reminder', async () => {
+ const h=harness(); await h.handle({...command,text:'Remind me tomorrow'});
+ assert.deepEqual(h.rejections,['AMBIGUOUS_REMINDER']);
+ const valid=harness();await valid.handle({...command,text:'Remind me to set an alarm tomorrow at 3 PM'});
+ assert.equal(valid.reject,0);assert.equal(valid.proposal.title,'set an alarm');assert.equal(valid.saves,0);
 });

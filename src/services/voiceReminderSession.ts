@@ -4,7 +4,7 @@ export type VoiceProposal = { title: string; date: string };
 export function createVoiceReminderHandler(deps: {
   authorized(id: string): Promise<boolean>;
   parsed(id: string, title: string, date: string, readback: string): Promise<void>;
-  rejected(id: string): Promise<void>;
+  rejected(id: string, reason: 'UNSUPPORTED_ALARM' | 'AMBIGUOUS_REMINDER'): Promise<void>;
   saved(id: string, ok: boolean): Promise<void>;
   save(id: string, proposal: VoiceProposal): Promise<void>;
 }) {
@@ -14,7 +14,11 @@ export function createVoiceReminderHandler(deps: {
     if (request.kind === 'parse') {
       proposals.clear(); // Only one native session can own a proposal.
       const parsed = parseVoiceReminder(request.text ?? '');
-      if (!parsed.reminder) { await deps.rejected(request.id); return; }
+      if (!parsed.reminder) {
+        // Classify only unsupported command prefixes, not titles inside valid reminders.
+        const alarm = /^(?:(?:please )?(?:set|create|add|schedule) (?:an? |the )?alarm\b|wake me\b)/i.test((request.text ?? '').trim());
+        await deps.rejected(request.id, alarm ? 'UNSUPPORTED_ALARM' : 'AMBIGUOUS_REMINDER'); return;
+      }
       const proposal = { title: parsed.reminder.title, date: parsed.reminder.date.toISOString() };
       proposals.set(request.id, proposal);
       const when = parsed.reminder.date.toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });

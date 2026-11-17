@@ -16,7 +16,7 @@ export function useHeyMatrixCommands(onSaved: (records: Reminder[]) => void) {
     const handle = createVoiceReminderHandler({
       authorized,
       parsed: async (id, title, date, readback) => { await native.parsedReminder?.(id, title, date, readback); },
-      rejected: async id => { await native.rejectVoiceCommand?.(id); },
+      rejected: async (id, reason) => { await native.rejectVoiceCommand?.(id, reason); },
       saved: async (id, ok) => { await native.voiceSaved?.(id, ok); },
       save: async (id, proposal) => {
         const settings = JSON.parse(await AsyncStorage.getItem(SETTINGS_KEY) || '{}');

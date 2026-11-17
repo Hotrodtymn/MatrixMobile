@@ -4,6 +4,9 @@ export type HeyMatrixDiagnostics = {
   stage: string; serviceStarted: boolean; modelLoaded: boolean; microphoneActive: boolean;
   samplesRead: number; decodeSteps: number; inputObserved: boolean; lastAudioAt: number;
   lastDetectionAt: number; toneStatus: string; lastErrorCode: string;
+  voiceStage?: string; voiceCleanupException?: string; wakeReleasedAt?: number;
+  voiceFailure?: { stage: string; phase: string; code: string; androidCode: number; exceptionType: string;
+    explanation: string; at: number; mainThread: boolean; wakeReleasedAt: number };
 };
 export type HeyMatrixState = { state: 'stopped' | 'starting' | 'listening' | 'cooldown' | 'stopping' | 'error'; message: string; detections: number; occupied: boolean; diagnostics?: HeyMatrixDiagnostics; voicePhase?: string; voiceStatus?: string };
 declare class HeyMatrixNative extends NativeModule {
@@ -15,7 +18,7 @@ declare class HeyMatrixNative extends NativeModule {
   setHostReady?(ready: boolean): Promise<void>;
   takeVoiceRequest?(): Promise<VoiceRequest | null>;
   parsedReminder?(id: string, title: string, date: string, readback: string): Promise<void>;
-  rejectVoiceCommand?(id: string): Promise<void>;
+  rejectVoiceCommand?(id: string, reason?: string): Promise<void>;
   isSaveAuthorized?(id: string): Promise<boolean>;
   voiceSaved?(id: string, ok: boolean): Promise<void>;
 }

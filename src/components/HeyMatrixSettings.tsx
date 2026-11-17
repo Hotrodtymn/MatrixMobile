@@ -58,6 +58,15 @@ export function HeyMatrixSettings({ light }: { light: boolean }) {
       <Text style={{ color: c.muted }}>Nonzero input observed: {d.inputObserved ? 'yes (not proof of intelligible speech)' : 'no'} · Last capture: {time(d.lastAudioAt)}</Text>
       <Text style={{ color: c.muted }}>Last wake detection: {time(d.lastDetectionAt)}</Text>
       <Text style={{ color: c.muted }}>Acknowledgment: {d.toneStatus}</Text>
+      <Text style={{ color: c.muted }}>Voice stage: {d.voiceStage ?? 'Requires updated APK'} · Last wake mic release: {time(d.wakeReleasedAt ?? 0)}</Text>
+      {!!d.voiceFailure?.code && <View style={{ gap: 4 }}>
+        <Text style={{ color: c.error }}>Last voice failure: {d.voiceFailure.code} at {time(d.voiceFailure.at)}</Text>
+        <Text style={{ color: c.muted }}>Phase: {d.voiceFailure.phase} · Stage: {d.voiceFailure.stage}</Text>
+        <Text style={{ color: c.muted }}>Android code: {d.voiceFailure.androidCode >= 0 ? d.voiceFailure.androidCode : 'not supplied'} · Exception: {d.voiceFailure.exceptionType || 'none reported'} · Main thread: {String(d.voiceFailure.mainThread)}</Text>
+        <Text style={{ color: c.muted }}>Wake microphone release before failure: {time(d.voiceFailure.wakeReleasedAt)}</Text>
+        <Text style={{ color: c.error }}>{d.voiceFailure.explanation}</Text>
+      </View>}
+      {!!d.voiceCleanupException && <Text style={{ color: c.error }}>Recognizer cleanup exception: {d.voiceCleanupException}. Restart Matrix before listening again.</Text>}
       {!!d.lastErrorCode && <Text style={{ color: c.error }}>Error code: {d.lastErrorCode}</Text>}
     </View> : heyMatrix ? <Text style={{ color: c.muted }}>Detailed diagnostics require the updated APK.</Text> : null}
     <Text style={{ color: c.muted }}>If Service is not started, enable listening while Matrix is open. If capture stays at zero, check microphone permission and the Android microphone privacy switch. If detections increase without a tone, raise media volume and test the tone. A loaded model alone does not prove wake detection.</Text>
