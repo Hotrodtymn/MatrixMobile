@@ -48,3 +48,7 @@ After a separately authorized preview build, install over the existing app with 
 5. Test dated/timed/date-only/undated/completed tasks, including an overdue previous-day task; rows open Tasks. Test no-data sections, loading and retry on a simulated storage read failure without clearing real data.
 6. Leave Today open over midnight, background/return and change device timezone. Refresh and check local date boundaries. Confirm no date is derived from UTC task-date parsing.
 7. Regression: ring and flip-silence an alarm (face up/upright first, then sustained face down); repeat locked and with vibration; verify its next recurring occurrence still rings. Recheck notification actions/snooze, notes, calendar, tasks, timer, stopwatch and restart persistence. Record actual APK version/build and results; do not treat baseline acceptance as established by this report.
+
+## User-reported Samsung verification (recorded 2026-11-18)
+
+The user confirms: Today Dashboard OTA received; reminders and alarms displayed correctly; item navigation worked; an alarm rang; Flip to Silence successfully stopped that alarm. These are the reported acceptance checks only, not independent agent testing. The APK/build number was not identified; do not infer build 11 or claim other device, recurrence, lock-screen, reboot, notification-action or durability tests.

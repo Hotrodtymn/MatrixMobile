@@ -1,3 +1,5 @@
+import { PrioritySelector } from '../components/ReminderMetadataControls';
+import { ReminderPriority, reminderPriority, compareReminderPriority } from '../services/reminderMetadata';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,6 +18,7 @@ export function TodayDashboard({ light, reminders, alarms, onBack, onReminder, o
   const theme = taskTheme(light);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState(false);
+  const [priorityFilter,setPriorityFilter] = useState<"all" | ReminderPriority>("all");
   const [refreshing, setRefreshing] = useState(true);
   const [now, setNow] = useState(() => new Date());
   const generation = useRef(0);
@@ -39,15 +42,17 @@ export function TodayDashboard({ light, reminders, alarms, onBack, onReminder, o
     return () => clearTimeout(reload);
   }, [reminders, alarms, refresh]);
   const { today, overdue, upcoming, unknown, tasks, overdueTasks } = useMemo(() => {
-    const today = todayReminders(snapshot?.reminders ?? [], now);
-    const overdue = overdueReminders(snapshot?.reminders ?? [], now);
+    const visibleReminders = (snapshot?.reminders ?? []).filter(item=>priorityFilter === 'all' || reminderPriority(item) === priorityFilter);
+    const order = (a: {reminder:Reminder;date:Date},b: {reminder:Reminder;date:Date})=>compareReminderPriority(a.reminder,b.reminder) || a.date.getTime()-b.date.getTime();
+    const today = todayReminders(visibleReminders, now).sort(order);
+    const overdue = overdueReminders(visibleReminders, now).sort(order);
     const alarmRows = (snapshot?.alarms ?? []).filter(item => item.enabled).map(alarm => ({ alarm, ...nextAlarm(alarm, now) }));
     const upcoming = alarmRows.filter(row => row.date).sort((a,b) => a.date!.getTime()-b.date!.getTime());
     const unknown = alarmRows.filter(row => row.reason);
     const tasks = todayTasks(snapshot?.tasks ?? [], now);
     const overdueTasks = (snapshot?.tasks ?? []).filter(task => taskOverdue(task, now));
     return { today, overdue, upcoming, unknown, tasks, overdueTasks };
-  }, [snapshot, now]);
+  }, [snapshot, now, priorityFilter]);
   const row = (key: string, title: string, detail: string, late: boolean, onPress: () => void) => (
     <Pressable key={key} accessibilityRole="button" accessibilityLabel={`${title}. ${detail}`} onPress={onPress}
       style={[styles.row, { backgroundColor: theme.surface, borderColor: late ? theme.error : theme.border }]}>
@@ -63,14 +68,16 @@ export function TodayDashboard({ light, reminders, alarms, onBack, onReminder, o
       <Text style={{ color: theme.muted }}>{now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</Text>
       {refreshing && <Text accessibilityRole="progressbar" style={{ color: theme.muted }}>Loading today…</Text>}
       <TaskButton label="Refresh" theme={theme} onPress={() => void refresh()} disabled={refreshing} />
+      <PrioritySelector light={light} filter value={priorityFilter} onChange={value=>setPriorityFilter(value as "all" | ReminderPriority)} />
+      <Text style={{color:theme.muted}}>Priority filters apply to reminders only; alarms and tasks stay visible.</Text>
       {error ? <Text accessibilityRole="alert" style={{ color: theme.error }}>Today could not be loaded. Tap Refresh to retry. Your saved data has not been changed.</Text> : snapshot && <>
         <View style={[styles.row, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <Text style={{ color: theme.text }}>{today.length} today’s reminders · {upcoming.length} upcoming alarms · {overdue.length} overdue reminders</Text>
         </View>
         {heading('Today’s reminders')}
-        {today.length ? today.map(({reminder, date, overdue: late}) => row(reminder.id, reminder.title, `${formatTime(date)}${late ? ' · Overdue' : ''}${reminder.snoozedUntil && new Date(reminder.snoozedUntil) > date ? ` · Snoozed until ${formatDate(reminder.snoozedUntil)} ${formatTime(reminder.snoozedUntil)}` : ''} · Open reminder`, late, () => onReminder(reminder))) : empty('No incomplete reminder occurrences today.')}
+        {today.length ? today.map(({reminder, date, overdue: late}) => row(reminder.id, `${reminder.title} | Priority: ${reminderPriority(reminder)}`, `${formatTime(date)}${late ? ' · Overdue' : ''}${reminder.snoozedUntil && new Date(reminder.snoozedUntil) > date ? ` · Snoozed until ${formatDate(reminder.snoozedUntil)} ${formatTime(reminder.snoozedUntil)}` : ''} · Open reminder`, late, () => onReminder(reminder))) : empty('No incomplete reminder occurrences today.')}
         {heading('Overdue reminders')}
-        {overdue.length ? overdue.map(({reminder, date}) => row(reminder.id, reminder.title, `${formatDate(date)} ${formatTime(date)} · Overdue · Open reminder`, true, () => onReminder(reminder))) : empty('No overdue reminders.')}
+        {overdue.length ? overdue.map(({reminder, date}) => row(reminder.id, `${reminder.title} | Priority: ${reminderPriority(reminder)}`, `${formatDate(date)} ${formatTime(date)} · Overdue · Open reminder`, true, () => onReminder(reminder))) : empty('No overdue reminders.')}
         {heading('Upcoming alarms')}
         <Text style={{ color: theme.muted }}>Next occurrence per enabled alarm, from saved settings. These times do not verify Android permissions or delivery.</Text>
         {upcoming.map(({alarm, date}) => row(alarm.id, alarm.title || 'Alarm', `${formatDate(date!)} ${formatTime(date!)} · Open alarm`, false, () => onAlarm(alarm)))}
