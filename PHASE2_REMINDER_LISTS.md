@@ -1,12 +1,12 @@
-﻿# Phase 2: Reminder Lists & Priorities
+# Phase 2: Reminder Lists & Priorities
 
 ## Baseline, verification and merge review
 
-Started with feature/today-dashboard exactly at f24ada15890243fe9d9234ea824d15ff60c5f4d0 and a clean working tree. Created feature/reminder-lists-priorities directly from f24ada1. feature/ios-support remains isolated at e315558. No merge, push, OTA publication, APK build, signing or version/configuration change was performed. Changes are uncommitted.
+Started with feature/today-dashboard exactly at f24ada15890243fe9d9234ea824d15ff60c5f4d0 and a clean working tree. Created feature/reminder-lists-priorities directly from f24ada1. feature/ios-support remains isolated at e315558. No merge, push, OTA publication, APK build, signing or version/configuration change was performed. The implementation was subsequently committed as af8fc2c. These initial implementation notes precede the merge authorization recorded below.
 
 Recorded the user's Samsung confirmation in TODAY_DASHBOARD_PHASE1.md: Today Dashboard OTA received; reminders and alarms displayed correctly; item navigation worked; an alarm rang; Flip to Silence successfully stopped it. This is user-reported verification, not an independent agent/device test. No additional tests, APK/build number, lock-screen behavior or recurrence delivery are claimed.
 
-Prepared dashboard merge review: main remains at 5874270 and is an ancestor of f24ada1, so the dashboard candidate is eligible for a fast-forward after explicit approval. The net main-to-f24ada1 diff has 14 files: dashboard/read-only helpers/tests/report, voice-removal report, hardened editor save, flip regression tests/runner and app version 1.5.0. Native alarm patch/hash verification, native flip bridge, notification task, dependencies and existing EAS profiles are identical. No iOS commit is included. The ancestry includes historical voice experiments whose files are removed in the final tree; review the net tree, not an individual old commit. Approval must target f24ada1 specifically, not this new unverified Phase 2 branch. No merge was executed and main was not moved.
+Prepared dashboard merge review: main remains at 5874270 and is an ancestor of f24ada1, so the dashboard candidate is eligible for a fast-forward after explicit approval. The net main-to-f24ada1 diff has 14 files: dashboard/read-only helpers/tests/report, voice-removal report, hardened editor save, flip regression tests/runner and app version 1.5.0. Native alarm patch/hash verification, native flip bridge, notification task, dependencies and existing EAS profiles are identical. No iOS commit is included. The ancestry includes historical voice experiments whose files are removed in the final tree; review the net tree, not an individual old commit. At that initial review, only the dashboard was an acceptance candidate and no merge had been authorized or performed. This is historical context; the subsequent user-reported Phase 2 acceptance and approval below supersede that restriction.
 
 ## Files changed
 
@@ -57,3 +57,20 @@ After a separately authorized delivery, preserve the installed app and its data:
 5. Delete a list after confirmation. All its reminders must remain Unassigned with existing alerts intact. Cancel deletion and verify no change. Check filtering the deleted list transitions to Unassigned. Test storage-failure feedback only on disposable/test data, without clearing real data.
 6. Complete or snooze a recurring reminder through existing notification actions; ensure priority/list survive and later occurrences remain scheduled. Reopen/edit a reminder after deletion or notification changes to check stale-data behavior.
 7. Recheck reminder once/daily/weekly/monthly/selected-day delivery, calendar, notes, tasks, themes, safe areas, timer and stopwatch. Ring an alarm and test Flip to Silence again as a Phase 2 regression; the earlier user confirmation is not evidence this new code has passed device acceptance.
+
+## User-reported Phase 2 Samsung verification and merge authorization (2026-11-18)
+
+The user reports all eight Phase 2 checks passed:
+
+1. Existing reminders retained.
+2. List creation.
+3. List assignment.
+4. High priority.
+5. Combined filtering.
+6. Today priority indicator.
+7. Existing alarms.
+8. Flip to Silence.
+
+This records only the checks supplied by the user. It is not independent agent testing and does not establish an APK/build number or additional deletion, rename, storage-failure, lock-screen, reboot or recurrence-delivery verification. The Phase 1 Samsung record remains in TODAY_DASHBOARD_PHASE1.md unchanged.
+
+The user explicitly authorized merging feature/reminder-lists-priorities at af8fc2c, including ancestor f24ada1 and both verification records, after review/checks pass. The original main was 5874270. Review found approved Phase 1/Phase 2 and voice-free baseline changes only; the prior 1.1.1-to-1.5.0 version change is retained, with no new configuration edits. Native alarm/patch/action code and dependencies match original main; experimental voice files are absent, and e315558 from feature/ios-support is excluded. The actual merge hash and post-merge results are reported separately. No push, OTA publication, APK build or production configuration edit is authorized by this merge operation.
