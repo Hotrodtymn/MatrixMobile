@@ -47,5 +47,13 @@ fun main() {
   check(gap.update(0f, 0f, -9.8f, 5700))
   check(!gap.update(Float.NaN, 0f, -9.8f, 5800))
   check(!gap.update(0f, 0f, -9.8f, 5700)) // stale reading
+  // A new ring must re-arm; stale orientation from the previous ring cannot silence it.
+  val nextRing = armed()
+  check(trace(nextRing, 1100, 3000, -9.8f))
+  nextRing.reset()
+  check(!trace(nextRing, 4000, 7000, -9.8f))
+  check(!trace(nextRing, 7100, 8500, 9.8f))
+  check(trace(nextRing, 8600, 10500, -9.8f))
+
   println("Flip detector tests passed: arming, hold, reset, vibration, tilt, brief flip, shock, gaps, invalid/stale samples")
 }

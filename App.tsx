@@ -1,3 +1,7 @@
+import { ReminderMetadataFields, ReminderListManager, PrioritySelector } from "./src/components/ReminderMetadataControls";
+import { ReminderPriority, ReminderList, ReminderFilters, reminderPriority, reminderListId, matchesReminderFilters, compareReminderPriority } from "./src/services/reminderMetadata";
+import { readReminderLists, updateReminderMetadata } from "./src/services/reminders";
+import { TodayDashboard } from "./src/screens/TodayDashboard";
 import { TasksPage } from "./src/screens/TasksPage";
 import { supportsFlipToSilence, setFlipToSilence } from "./src/services/nativeAlarmSettings";
 import { WeekdaySelector } from "./src/components/WeekdaySelector";
@@ -24,7 +28,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Notifications from "expo-notifications";
 import * as IntentLauncher from "expo-intent-launcher";
 import AlarmScheduler from "react-native-alarm-scheduler";
-import { refreshLegacyNotificationText, mergeReminderChanges, STORAGE_KEY, NOTES_KEY, SETTINGS_KEY, ALARMS_KEY, NOTIFICATION_CATEGORY, Recurrence, AppView, MatrixAlarm, ClockTab, AppSettings, DEFAULT_SETTINGS, Subtask, Reminder, Note, NOTIFICATION_ACTIONS, serializeReminderMutation, cancelReminderNotifications, reminderContent, scheduleReminder, homeReminderVisible, homeAlarmVisible, handleNotificationResponse, getRecurrence, getTaskDate, isToday, getReminderOccurrenceDate, formatDate, formatTime, recurrenceLabel, buildTrigger } from "./src/services/reminders";
+import { commitReminder, refreshLegacyNotificationText, mergeReminderChanges, STORAGE_KEY, NOTES_KEY, SETTINGS_KEY, ALARMS_KEY, NOTIFICATION_CATEGORY, Recurrence, AppView, MatrixAlarm, ClockTab, AppSettings, DEFAULT_SETTINGS, Subtask, Reminder, Note, NOTIFICATION_ACTIONS, serializeReminderMutation, cancelReminderNotifications, reminderContent, scheduleReminder, homeReminderVisible, homeAlarmVisible, handleNotificationResponse, getRecurrence, getTaskDate, isToday, getReminderOccurrenceDate, formatDate, formatTime, recurrenceLabel, buildTrigger } from "./src/services/reminders";
 function getDefaultReminderDate() {
   const date = new Date();
   date.setSeconds(0, 0);
@@ -39,6 +43,25 @@ export default function App() {
   const [alarmWeekdays, setAlarmWeekdays] = useState<number[]>([0,1,2,3,4,5,6]);
   const [editingReminderId, setEditingReminderId] = useState<string | null>(null);
   const [description, setDescription] = useState("");
+  const [reminderLists, setReminderLists] = useState<ReminderList[]>([]);
+  const [listsError, setListsError] = useState(false);
+  const [listsReady, setListsReady] = useState(false);
+  const [priority, setPriority] = useState<ReminderPriority>("none");
+  const [listId, setListId] = useState<string | undefined>();
+  const [reminderFilters, setReminderFilters] = useState<ReminderFilters>({list:"all",priority:"all",status:"active"});
+  const originalEditorDate = useRef<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    const reload = () => { void readReminderLists().then(value => { if(active){setReminderLists(value);setListsError(false);setListsReady(true);} }).catch(()=>{if(active){setListsError(true);setListsReady(true);}}); };
+    reload(); const subscription = AppState.addEventListener("change",state=>{if(state==="active")reload();});
+    return ()=>{active=false;subscription.remove();};
+  }, []);
+  async function refreshReminderLists(records?: Reminder[]) {
+    const lists = await readReminderLists(); setReminderLists(lists); setListsError(false); setListsReady(true);
+    setReminderFilters(current=>current.list !== "all" && current.list !== "unassigned" && !lists.some(list=>list.id===current.list) ? {...current,list:"unassigned"} : current);
+    setListId(current=>current && !lists.some(list=>list.id===current) ? undefined : current);
+    if (records) setReminders(records);
+  }
   const [subtaskDraft, setSubtaskDraft] = useState("");
   const [reminderDate, setReminderDate] = useState(getDefaultReminderDate());
   const [recurrence, setRecurrence] = useState<Recurrence>("once");
@@ -58,6 +81,7 @@ export default function App() {
   );
   // Notes have their own storage key and do not change reminder data.
   const [showHome, setShowHome] = useState(true);
+  const [showTodayDashboard, setShowTodayDashboard] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [showTaskList, setShowTaskList] = useState(false);
@@ -525,11 +549,22 @@ export default function App() {
       Alert.alert("Could not save setting", "Please try again.");
     }
   }
+  function openEditReminder(reminder: Reminder) {
+    if (!listsReady || listsError) { Alert.alert("Lists unavailable", "Wait for lists to load, or retry from the reminders screen before editing. Saved reminders are unchanged."); return; }
+    setSelectedCalendarDate(new Date(reminder.date)); setEditingReminderId(reminder.id); setTitle(reminder.title); setDescription(reminder.description ?? "");
+    const editorDate = getTaskDate(reminder); originalEditorDate.current = editorDate.toISOString();
+    setPriority(reminderPriority(reminder)); setListId(reminderListId(reminder, reminderLists));
+    setReminderDate(editorDate); setRecurrence(getRecurrence(reminder)); setWeekdays(reminder.weekdays ?? []);
+    setSubtaskDraft((reminder.subtasks ?? []).map(item => item.title).join("\n"));
+    setShowCalendarReminderModal(true);
+  }
   function cancelReminderEditor() {
+    setPriority("none"); setListId(undefined); originalEditorDate.current = null;
     setShowCalendarReminderModal(false); setEditingReminderId(null); setTitle(""); setDescription("");
     setSubtaskDraft(""); setRecurrence("once"); setWeekdays([]); setReminderDate(getDefaultReminderDate());
   }
   function startReminderFromCalendar() {
+    setPriority("none"); setListId(undefined); originalEditorDate.current = null;
     const selected = new Date(selectedCalendarDate);
     const defaultTime = getDefaultReminderDate();
     selected.setHours(defaultTime.getHours(), defaultTime.getMinutes(), 0, 0);
@@ -943,6 +978,16 @@ export default function App() {
       );
       return false;
     }
+    const editing = reminders.find(item => item.id === editingReminderId);
+    const metadataOnly = !!editing && cleanTitle === editing.title && description.trim() === (editing.description ?? "").trim() &&
+      reminderDate.toISOString() === originalEditorDate.current && recurrence === getRecurrence(editing) &&
+      JSON.stringify(weekdays) === JSON.stringify(editing.weekdays ?? []) && subtaskDraft === (editing.subtasks ?? []).map(item=>item.title).join("\n");
+    if (metadataOnly) {
+      setSaving(true);
+      try { setReminders(await updateReminderMetadata(editing.id, priority, listId)); cancelReminderEditor(); return true; }
+      catch(error) { Alert.alert("Couldn't save reminder",error instanceof Error?error.message:"Please retry."); return false; }
+      finally { setSaving(false); }
+    }
     if (reminderDate.getTime() <= Date.now()) {
       Alert.alert(
         "Choose a future time",
@@ -954,8 +999,6 @@ export default function App() {
       Alert.alert("Choose days", "Select at least one weekday."); return false;
     }
     setSaving(true);
-    let notificationIds: string[] = [];
-    let notificationId: string | undefined;
     try {
       let granted = settings.notificationsEnabled;
       if (settings.notificationsEnabled) {
@@ -974,11 +1017,6 @@ export default function App() {
       }
       const taskId = editingReminderId || `${Date.now()}-${Math.random()}`;
       const existing = reminders.find(item => item.id === editingReminderId);
-      notificationIds = settings.notificationsEnabled ? await scheduleReminder({
-        id: taskId, title: cleanTitle, description: description.trim(), date: reminderDate.toISOString(),
-        recurrence, weekdays, notificationId: "",
-      }) : [];
-      notificationId = notificationIds[0] || "";
       const subtasks: Subtask[] = subtaskDraft
         .split("\n")
         .map((item) => item.trim())
@@ -991,11 +1029,11 @@ export default function App() {
       const newReminder: Reminder = {
         ...existing,
         id: taskId,
+        priority, listId,
         title: cleanTitle,
         description: description.trim(),
         date: reminderDate.toISOString(),
-        notificationId,
-        notificationIds,
+        notificationId: "",
         weekdays,
         completedThrough: undefined,
         snoozedUntil: undefined,
@@ -1004,15 +1042,12 @@ export default function App() {
         starred: existing?.starred ?? false,
         subtasks: existing && subtaskDraft === (existing.subtasks ?? []).map(item => item.title).join("\n") ? existing.subtasks : subtasks,
       };
-      await saveReminders(existing ? reminders.map(item => item.id === existing.id ? newReminder : item) : [newReminder, ...reminders]);
-      if (existing) {
-        await cancelReminderNotifications(existing.id, existing.notificationId, notificationIds).catch(error => {
-          console.error("Reminder saved but old alerts could not be cancelled:", error);
-          Alert.alert("Reminder saved", "Some previous alerts could not be cancelled. Reopen the reminder and save again to retry.");
-        });
-      }
+      const result = await commitReminder(newReminder, { base: reminders, notificationsEnabled: settings.notificationsEnabled });
+      setReminders(result.records);
+      if (result.cleanupFailed) Alert.alert("Reminder saved", "Some previous alerts could not be cancelled. Reopen the reminder and save again to retry.");
       // Selected-day requests must all survive replacement cleanup.
       setEditingReminderId(null);
+      setPriority("none"); setListId(undefined); originalEditorDate.current = null;
       setTitle("");
       setDescription("");
       setSubtaskDraft("");
@@ -1024,7 +1059,6 @@ export default function App() {
       return true;
     } catch (error) {
       console.error("Could not create task:", error);
-      await Promise.all(notificationIds.map(id => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
       Alert.alert("Couldn't save reminder", "Please try again.");
       return false;
     } finally {
@@ -1274,8 +1308,7 @@ export default function App() {
   const visibleReminders = useMemo(() => {
     return reminders
       .filter((item) => {
-        if (view === "completed") return !!item.completed;
-        if (item.completed) return false;
+        if (!matchesReminderFilters(item, reminderLists, reminderFilters)) return false;
         if (view === "starred" && !item.starred) return false;
         if (view === "today") {
           const date = getTaskDate(item, new Date(now));
@@ -1287,6 +1320,7 @@ export default function App() {
         return true;
       })
       .sort((a, b) => {
+        const priorityOrder = compareReminderPriority(a,b); if (priorityOrder) return priorityOrder;
         if (view !== "completed" && !!a.starred !== !!b.starred) {
           return a.starred ? -1 : 1;
         }
@@ -1295,7 +1329,7 @@ export default function App() {
           getTaskDate(b, new Date(now)).getTime()
         );
       });
-  }, [reminders, view, now]);
+  }, [reminders, view, now, reminderLists, reminderFilters]);
   const viewTitle: Record<AppView, string> = {
     today: "Today",
     all: "All reminders",
@@ -1353,6 +1387,7 @@ export default function App() {
             >
               {reminder.title}
             </Text>
+            <Text style={themeStyles.taskDate}>Priority: {reminderPriority(reminder)} | {reminderLists.find(list=>list.id===reminderListId(reminder,reminderLists))?.name ?? "Unassigned"}</Text>
             {!!reminder.description && <Text style={themeStyles.taskDate}>{reminder.description}</Text>}
             <Text
               style={[themeStyles.taskDate, overdue && themeStyles.overdueText]}
@@ -1402,10 +1437,7 @@ export default function App() {
         {expanded && (
           <View style={themeStyles.subtaskArea}>
             <Pressable style={themeStyles.noteActionButton} onPress={() => {
-              setSelectedCalendarDate(new Date(reminder.date)); setEditingReminderId(reminder.id); setTitle(reminder.title); setDescription(reminder.description ?? "");
-              setReminderDate(getTaskDate(reminder)); setRecurrence(getRecurrence(reminder)); setWeekdays(reminder.weekdays ?? []);
-              setSubtaskDraft((reminder.subtasks ?? []).map(item => item.title).join("\n"));
-              setShowCalendarReminderModal(true);
+              openEditReminder(reminder);
             }}><Text style={themeStyles.noteActionText}>EDIT REMINDER</Text></Pressable>
             {children.map((child) => (
               <Pressable
@@ -1572,6 +1604,16 @@ export default function App() {
           <Text style={themeStyles.homeLogoText}>⌂</Text>
         </Pressable>
       </View>
+      <Modal visible={showTodayDashboard} animationType="slide" onRequestClose={() => setShowTodayDashboard(false)}>
+        {showTodayDashboard && <TodayDashboard light={isLightTheme} reminders={reminders} alarms={alarms}
+          onBack={() => setShowTodayDashboard(false)}
+          onReminder={item => { setShowTodayDashboard(false); openEditReminder(item); }}
+          onAlarm={item => { setShowTodayDashboard(false); openEditAlarm(item); }}
+          onTasks={() => {
+            setShowTodayDashboard(false); setShowTasks(true); setShowHome(false); setShowNotes(false);
+            setShowTaskList(false); setShowSettings(false); setShowCalendar(false); setShowClock(false);
+          }} />}
+      </Modal>
       <Modal
         visible={showMenu}
         transparent
@@ -1604,6 +1646,10 @@ export default function App() {
             </View>
 
             <Text style={themeStyles.menuSectionLabel}>WORKSPACE</Text>
+            <Pressable style={themeStyles.menuItem} accessibilityRole="button" accessibilityLabel="Today Dashboard"
+              onPress={() => { setShowMenu(false); setShowTodayDashboard(true); }}>
+              <Text style={themeStyles.menuItemText}>Today Dashboard</Text>
+            </Pressable>
             <Pressable style={[themeStyles.menuItem, showTasks && themeStyles.menuItemActive]}
               accessibilityRole="button" accessibilityLabel="Tasks"
               onPress={() => {
@@ -1775,6 +1821,10 @@ export default function App() {
       >
         {showHome ? (
           <View style={themeStyles.homeScreen}>
+            <Pressable style={themeStyles.taskListButton} accessibilityRole="button" accessibilityLabel="Open Today Dashboard"
+              onPress={() => setShowTodayDashboard(true)}>
+              <Text style={themeStyles.taskListButtonText}>TODAY DASHBOARD</Text>
+            </Pressable>
             <View style={themeStyles.homeDateBlock}>
               <Text style={themeStyles.homeEyebrow}>YOUR DAY</Text>
               <Text style={themeStyles.heading}>
@@ -2689,7 +2739,7 @@ export default function App() {
               ).map(([key, label]) => (
                 <Pressable
                   key={key}
-                  onPress={() => setView(key)}
+                  onPress={() => { setView(key); setReminderFilters(current=>({...current,status:key==="completed"?"completed":"active"})); }}
                   style={[
                     themeStyles.viewTab,
                     view === key && themeStyles.viewTabActive,
@@ -2705,6 +2755,16 @@ export default function App() {
                   </Text>
                 </Pressable>
               ))}
+            </View>
+            <ReminderListManager lists={reminderLists} light={isLightTheme} onChanged={refreshReminderLists} />
+            {listsError && <Pressable onPress={()=>void refreshReminderLists().catch(()=>setListsError(true))}><Text style={themeStyles.emptyText}>Lists could not be loaded. Tap to retry; saved data is unchanged.</Text></Pressable>}
+            <Text style={themeStyles.label}>LIST FILTER</Text>
+            <View style={themeStyles.recurrenceRow}>
+              {[{id:"all",name:"All lists"},{id:"unassigned",name:"Unassigned"},...reminderLists].map(list=><Pressable key={list.id} accessibilityRole="button" accessibilityState={{selected:reminderFilters.list===list.id}} style={[themeStyles.recurrenceButton,reminderFilters.list===list.id && themeStyles.recurrenceButtonActive]} onPress={()=>setReminderFilters(current=>({...current,list:list.id}))}><Text style={themeStyles.recurrenceText}>{list.name}</Text></Pressable>)}
+            </View>
+            <PrioritySelector light={isLightTheme} filter value={reminderFilters.priority} onChange={value=>setReminderFilters(current=>({...current,priority:value as ReminderFilters["priority"]}))} />
+            <Text style={themeStyles.label}>COMPLETION FILTER</Text><View style={themeStyles.recurrenceRow}>
+              {(["all","active","completed"] as const).map(status=><Pressable key={status} accessibilityRole="button" accessibilityState={{selected:reminderFilters.status===status}} style={[themeStyles.recurrenceButton,reminderFilters.status===status && themeStyles.recurrenceButtonActive]} onPress={()=>setReminderFilters(current=>({...current,status}))}><Text style={themeStyles.recurrenceText}>{status}</Text></Pressable>)}
             </View>
             <View style={themeStyles.tasksHeadingRow}>
               <Text style={themeStyles.sectionTitle}>
@@ -2778,6 +2838,7 @@ export default function App() {
               />
               <Text style={themeStyles.label}>DESCRIPTION (OPTIONAL)</Text>
               <TextInput style={themeStyles.input} value={description} onChangeText={setDescription} maxLength={1200} />
+              <ReminderMetadataFields lists={reminderLists} light={isLightTheme} priority={priority} listId={listId} onPriority={setPriority} onList={setListId} />
               <Text style={themeStyles.label}>CHECKLIST STEPS (OPTIONAL)</Text>
               <TextInput
                 style={[themeStyles.input, themeStyles.multilineInput]}
@@ -2830,7 +2891,7 @@ export default function App() {
                 </Text>
               </Pressable>
               <Pressable style={themeStyles.modalSecondaryButton} onPress={() => {
-                setTitle(""); setDescription(""); setSubtaskDraft(""); setRecurrence("once"); setWeekdays([]); setEditingReminderId(null); setShowHome(true);
+                setTitle(""); setDescription(""); setSubtaskDraft(""); setRecurrence("once"); setWeekdays([]); setPriority("none"); setListId(undefined); setEditingReminderId(null); setShowHome(true);
               }}><Text style={themeStyles.modalSecondaryText}>CANCEL</Text></Pressable>
               </View>
             </View>
@@ -3040,6 +3101,7 @@ export default function App() {
               />
               <Text style={themeStyles.label}>DESCRIPTION (OPTIONAL)</Text>
               <TextInput style={themeStyles.input} value={description} onChangeText={setDescription} maxLength={1200} />
+              <ReminderMetadataFields lists={reminderLists} light={isLightTheme} priority={priority} listId={listId} onPriority={setPriority} onList={setListId} />
               <Text style={themeStyles.label}>CHECKLIST STEPS (OPTIONAL)</Text>
               <TextInput
                 style={[themeStyles.input, themeStyles.multilineInput]}

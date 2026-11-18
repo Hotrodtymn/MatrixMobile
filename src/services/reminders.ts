@@ -1,3 +1,4 @@
+import type { ReminderPriority, ReminderList } from "./reminderMetadata";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
@@ -45,6 +46,8 @@ export type Subtask = {
   completed: boolean;
 };
 export type Reminder = {
+  priority?: ReminderPriority;
+  listId?: string;
   id: string;
   title: string;
   description?: string;
@@ -411,4 +414,106 @@ export async function refreshLegacyNotificationText(reminders: Reminder[]) {
       trigger: buildTrigger(date, recurrence),
     });
   }
+}
+
+// Serialized editor save with scheduling rollback and protection against stale writes.
+export async function commitReminder(draft: Reminder, options: {
+  base?: Reminder[]; notificationsEnabled: boolean;
+}): Promise<{ records: Reminder[]; cleanupFailed: boolean }> {
+  return serializeReminderMutation(async () => {
+    const valid = async () => {
+      if (!draft.title.trim() || draft.title.trim().length > 150 || !Number.isFinite(Date.parse(draft.date)) || Date.parse(draft.date) <= Date.now()) throw new Error('Reminder needs a valid title and future time.');
+      if (draft.recurrence === 'selectedDays' && !draft.weekdays?.length) throw new Error('Select reminder weekdays.');
+    };
+    await valid();
+    draft = { ...draft, ...await checkedReminderMetadata(draft.priority ?? "none", draft.listId) };
+    const latest: Reminder[] = JSON.parse(await AsyncStorage.getItem(STORAGE_KEY) || '[]');
+    const base = options.base ?? latest;
+    const editing = base.some(item => item.id === draft.id);
+    const previous = latest.find(item => item.id === draft.id);
+    // Stable reminder IDs prevent duplicate saves.
+    if (!editing && previous) return { records: latest, cleanupFailed: false };
+    if (editing && !previous) throw new Error('This reminder was deleted.');
+    let ids: string[] = [];
+    try {
+      ids = options.notificationsEnabled ? await scheduleReminder(draft) : [];
+      await valid(); // Recheck validation and time after scheduling.
+      const saved = { ...draft, title: draft.title.trim(), notificationId: ids[0] || '', notificationIds: ids };
+      const desired = editing ? base.map(item => item.id === saved.id ? saved : item) : [saved, ...base];
+      const records = mergeReminderChanges(base, desired, latest);
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+      let cleanupFailed = false;
+      if (previous) await cancelReminderNotifications(previous.id, previous.notificationId, ids).catch(() => { cleanupFailed = true; });
+      return { records, cleanupFailed };
+    } catch (error) {
+      await Promise.all(ids.map(id => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+      throw error;
+    }
+  });
+}
+
+// New entity only: legacy reminder/storage keys and raw records are never migrated on read.
+export const REMINDER_LISTS_KEY = 'matrix.reminder-lists.v1';
+type ListCatalog = { schemaVersion: 1; lists: ReminderList[]; [key: string]: unknown };
+async function readListCatalog(): Promise<ListCatalog> {
+  const raw = await AsyncStorage.getItem(REMINDER_LISTS_KEY);
+  if (raw === null) return { schemaVersion: 1, lists: [] };
+  const value = JSON.parse(raw);
+  if (!value || value.schemaVersion !== 1 || !Array.isArray(value.lists) || value.lists.some((list: ReminderList) => !list || typeof list.id !== 'string' || !list.id || typeof list.name !== 'string' || !list.name.trim() || (list.deleted !== undefined && typeof list.deleted !== 'boolean')) || new Set(value.lists.map((list: ReminderList) => list.id)).size !== value.lists.length) throw new Error('Reminder lists cannot be read. Saved data has not been changed.');
+  return value;
+}
+export async function readReminderLists(): Promise<ReminderList[]> { return (await readListCatalog()).lists.filter(list => !list.deleted); }
+function listName(name: string, catalog: ListCatalog, exceptId?: string) {
+  const clean = name.trim();
+  if (!clean || clean.length > 60) throw new Error('Use a list name between 1 and 60 characters.');
+  if (catalog.lists.some(list => !list.deleted && list.id !== exceptId && list.name.toLowerCase() === clean.toLowerCase())) throw new Error('A list with that name already exists.');
+  return clean;
+}
+export function createReminderList(name: string): Promise<void> {
+  return serializeReminderMutation(async () => {
+    const catalog = await readListCatalog(); const clean = listName(name, catalog);
+    let id = `list-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    while (catalog.lists.some(list => list.id === id)) id += '-1';
+    await AsyncStorage.setItem(REMINDER_LISTS_KEY, JSON.stringify({ ...catalog, lists: [...catalog.lists, { id, name: clean }] }));
+  });
+}
+export function renameReminderList(id: string, name: string): Promise<void> {
+  return serializeReminderMutation(async () => {
+    const catalog = await readListCatalog();
+    if (!catalog.lists.some(list => list.id === id && !list.deleted)) throw new Error('This list was deleted.');
+    const clean = listName(name, catalog, id);
+    await AsyncStorage.setItem(REMINDER_LISTS_KEY, JSON.stringify({ ...catalog, lists: catalog.lists.map(list => list.id === id ? { ...list, name: clean } : list) }));
+  });
+}
+async function metadataReminderRecords(): Promise<Reminder[]> {
+  const records = JSON.parse(await AsyncStorage.getItem(STORAGE_KEY) ?? '[]');
+  if (!Array.isArray(records) || records.some(item => !item || typeof item.id !== 'string') || new Set(records.map(item => item.id)).size !== records.length) throw new Error('Reminders cannot be read. Saved data has not been changed.');
+  return records;
+}
+async function checkedReminderMetadata(priority: ReminderPriority, listId?: string) {
+  if (!['none','low','medium','high'].includes(priority)) throw new Error('Choose a valid reminder priority.');
+  if (listId !== undefined && !(await readReminderLists()).some(list => list.id === listId)) throw new Error('This list is unavailable. Select Unassigned or another list.');
+  return { priority, listId };
+}
+export function updateReminderMetadata(id: string, priority: ReminderPriority, listId?: string): Promise<Reminder[]> {
+  return serializeReminderMutation(async () => {
+    const metadata = await checkedReminderMetadata(priority, listId);
+    const records = await metadataReminderRecords();
+    if (!records.some(item => item.id === id)) throw new Error('This reminder was deleted.');
+    const updated = records.map(item => item.id === id ? { ...item, ...metadata } : item);
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    return updated; // No scheduling/cancellation or completion/snooze mutation.
+  });
+}
+export function deleteReminderList(id: string): Promise<{ records: Reminder[]; cleanupFailed: boolean }> {
+  return serializeReminderMutation(async () => {
+    const catalog = await readListCatalog(); const records = await metadataReminderRecords();
+    if (!catalog.lists.some(list => list.id === id)) throw new Error('This list is unavailable.');
+    // Tombstone first: interrupted cleanup still makes all its assignments logically Unassigned.
+    // IDs are never reused; stale editors cannot resurrect a deleted list.
+    await AsyncStorage.setItem(REMINDER_LISTS_KEY, JSON.stringify({ ...catalog, lists: catalog.lists.map(list => list.id === id ? { ...list, deleted: true } : list) }));
+    const updated = records.map(item => { if (item.listId !== id) return item; const { listId: removed, ...rest } = item; void removed; return rest; });
+    try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated)); return { records: updated, cleanupFailed: false }; }
+    catch { return { records, cleanupFailed: true }; }
+  });
 }
