@@ -1,3 +1,4 @@
+import { TodayDashboard } from "./src/screens/TodayDashboard";
 import { TasksPage } from "./src/screens/TasksPage";
 import { supportsFlipToSilence, setFlipToSilence } from "./src/services/nativeAlarmSettings";
 import { WeekdaySelector } from "./src/components/WeekdaySelector";
@@ -58,6 +59,7 @@ export default function App() {
   );
   // Notes have their own storage key and do not change reminder data.
   const [showHome, setShowHome] = useState(true);
+  const [showTodayDashboard, setShowTodayDashboard] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [showTaskList, setShowTaskList] = useState(false);
@@ -524,6 +526,12 @@ export default function App() {
       console.error("Could not save Matrix settings:", error);
       Alert.alert("Could not save setting", "Please try again.");
     }
+  }
+  function openEditReminder(reminder: Reminder) {
+    setSelectedCalendarDate(new Date(reminder.date)); setEditingReminderId(reminder.id); setTitle(reminder.title); setDescription(reminder.description ?? "");
+    setReminderDate(getTaskDate(reminder)); setRecurrence(getRecurrence(reminder)); setWeekdays(reminder.weekdays ?? []);
+    setSubtaskDraft((reminder.subtasks ?? []).map(item => item.title).join("\n"));
+    setShowCalendarReminderModal(true);
   }
   function cancelReminderEditor() {
     setShowCalendarReminderModal(false); setEditingReminderId(null); setTitle(""); setDescription("");
@@ -1389,10 +1397,7 @@ export default function App() {
         {expanded && (
           <View style={themeStyles.subtaskArea}>
             <Pressable style={themeStyles.noteActionButton} onPress={() => {
-              setSelectedCalendarDate(new Date(reminder.date)); setEditingReminderId(reminder.id); setTitle(reminder.title); setDescription(reminder.description ?? "");
-              setReminderDate(getTaskDate(reminder)); setRecurrence(getRecurrence(reminder)); setWeekdays(reminder.weekdays ?? []);
-              setSubtaskDraft((reminder.subtasks ?? []).map(item => item.title).join("\n"));
-              setShowCalendarReminderModal(true);
+              openEditReminder(reminder);
             }}><Text style={themeStyles.noteActionText}>EDIT REMINDER</Text></Pressable>
             {children.map((child) => (
               <Pressable
@@ -1559,6 +1564,16 @@ export default function App() {
           <Text style={themeStyles.homeLogoText}>⌂</Text>
         </Pressable>
       </View>
+      <Modal visible={showTodayDashboard} animationType="slide" onRequestClose={() => setShowTodayDashboard(false)}>
+        {showTodayDashboard && <TodayDashboard light={isLightTheme} reminders={reminders} alarms={alarms}
+          onBack={() => setShowTodayDashboard(false)}
+          onReminder={item => { setShowTodayDashboard(false); openEditReminder(item); }}
+          onAlarm={item => { setShowTodayDashboard(false); openEditAlarm(item); }}
+          onTasks={() => {
+            setShowTodayDashboard(false); setShowTasks(true); setShowHome(false); setShowNotes(false);
+            setShowTaskList(false); setShowSettings(false); setShowCalendar(false); setShowClock(false);
+          }} />}
+      </Modal>
       <Modal
         visible={showMenu}
         transparent
@@ -1591,6 +1606,10 @@ export default function App() {
             </View>
 
             <Text style={themeStyles.menuSectionLabel}>WORKSPACE</Text>
+            <Pressable style={themeStyles.menuItem} accessibilityRole="button" accessibilityLabel="Today Dashboard"
+              onPress={() => { setShowMenu(false); setShowTodayDashboard(true); }}>
+              <Text style={themeStyles.menuItemText}>Today Dashboard</Text>
+            </Pressable>
             <Pressable style={[themeStyles.menuItem, showTasks && themeStyles.menuItemActive]}
               accessibilityRole="button" accessibilityLabel="Tasks"
               onPress={() => {
@@ -1762,6 +1781,10 @@ export default function App() {
       >
         {showHome ? (
           <View style={themeStyles.homeScreen}>
+            <Pressable style={themeStyles.taskListButton} accessibilityRole="button" accessibilityLabel="Open Today Dashboard"
+              onPress={() => setShowTodayDashboard(true)}>
+              <Text style={themeStyles.taskListButtonText}>TODAY DASHBOARD</Text>
+            </Pressable>
             <View style={themeStyles.homeDateBlock}>
               <Text style={themeStyles.homeEyebrow}>YOUR DAY</Text>
               <Text style={themeStyles.heading}>
