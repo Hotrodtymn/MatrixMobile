@@ -20,6 +20,15 @@
     "production": {
       "autoIncrement": true,
       "channel": "production"
+    },
+    "widget-compat-spike": {
+      "extends": "preview",
+      "distribution": "internal",
+      "channel": "widget-compat-spike",
+      "environment": "preview",
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {

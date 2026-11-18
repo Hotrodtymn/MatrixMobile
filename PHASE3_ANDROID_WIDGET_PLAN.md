@@ -130,3 +130,11 @@ Alternatively provision a local JDK plus the existing project's Android SDK/Grad
 ### GitHub redirect verification
 
 A read-only request to https://api.github.com/repos/Hotrodtymn/Matrix-mobile followed the redirect and returned full_name Hotrodtymn/MatrixMobile, html_url https://github.com/Hotrodtymn/MatrixMobile and clone_url https://github.com/Hotrodtymn/MatrixMobile.git. A read-only ls-remote of that canonical Git URL returned main at 43126d0. origin still uses its original Matrix-mobile.git URL. No remote edit, repository rename, push or merge was performed. feature/ios-support remains at e315558 and isolated.
+
+## One isolated EAS build authorized (2026-11-18)
+
+The user approved exactly one internal Android compatibility build and no full widget implementation. Reviewed spike committed as ac98132 with message test: add Android widget compatibility spike. Added a widget-compat-spike build profile derived from preview, explicitly internal/APK, using preview environment and its own widget-compat-spike update channel. Existing development/preview/production profiles are unchanged.
+
+The plugin/native dependency requires a new native APK; it does not require changing appVersion/runtime merely to compile this isolated probe. Keep version/runtime 1.5.0 for this test only, as previously requested. No widget-dependent OTA will be published. The new build uses an empty isolated channel; shared preview stays mapped to its existing Phase 2 branch/update. A later widget release needs a reviewed runtime boundary before shared-channel deployment. Remote Android versionCode auto-increment is inherited from preview and is separate from the unchanged appVersion/runtime; the actual build code will be reported by EAS.
+
+Use the existing Android keystore with non-interactive frozen credentials. Stop on an unexpected payment requirement, credential change or destructive setup. Submit only one build, and do not install it automatically. Actual compilation status is reported after monitoring the EAS result.
