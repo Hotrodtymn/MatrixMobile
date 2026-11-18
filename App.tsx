@@ -1,6 +1,3 @@
-import { useHeyMatrixCommands } from "./src/hooks/useHeyMatrixCommands";
-import { HeyMatrixSettings } from "./src/components/HeyMatrixSettings";
-import { VoiceCommand } from "./src/components/VoiceCommand";
 import { TasksPage } from "./src/screens/TasksPage";
 import { supportsFlipToSilence, setFlipToSilence } from "./src/services/nativeAlarmSettings";
 import { WeekdaySelector } from "./src/components/WeekdaySelector";
@@ -37,7 +34,6 @@ function getDefaultReminderDate() {
   return date;
 }
 export default function App() {
-  const [voiceTranscript, setVoiceTranscript] = useState("");
   const [title, setTitle] = useState("");
   const [weekdays, setWeekdays] = useState<number[]>([]);
   const [alarmWeekdays, setAlarmWeekdays] = useState<number[]>([0,1,2,3,4,5,6]);
@@ -106,7 +102,6 @@ export default function App() {
   const [stopwatchElapsed, setStopwatchElapsed] = useState(0);
   const [expandedNotes, setExpandedNotes] = useState<string[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  useHeyMatrixCommands(setReminders);
   const systemColorScheme = useColorScheme();
   const isLightTheme =
     settings.theme === "light" ||
@@ -531,7 +526,6 @@ export default function App() {
     }
   }
   function cancelReminderEditor() {
-    setVoiceTranscript("");
     setShowCalendarReminderModal(false); setEditingReminderId(null); setTitle(""); setDescription("");
     setSubtaskDraft(""); setRecurrence("once"); setWeekdays([]); setReminderDate(getDefaultReminderDate());
   }
@@ -1006,7 +1000,6 @@ export default function App() {
       setReminders(result.records);
       if (result.cleanupFailed) Alert.alert("Reminder saved", "Some previous alerts could not be cancelled. Reopen the reminder and save again to retry.");
       // Selected-day requests must all survive replacement cleanup.
-      setVoiceTranscript("");
       setEditingReminderId(null);
       setTitle("");
       setDescription("");
@@ -1541,12 +1534,6 @@ export default function App() {
         >
           <Text style={themeStyles.logoText}>M</Text>
         </Pressable>
-        {!showHome && <VoiceCommand light={isLightTheme} disabled={loading || saving} onReview={(draft, transcript) => {
-          setEditingReminderId(null); setDescription(""); setSubtaskDraft("");
-          setRecurrence("once"); setWeekdays([]); setTitle(draft.title);
-          setReminderDate(draft.date); setSelectedCalendarDate(draft.date);
-          setVoiceTranscript(transcript); setShowCalendarReminderModal(true);
-        }} />}
         <View style={themeStyles.brandText}>
           <Text style={themeStyles.appName}>MATRIX</Text>
         </View>
@@ -2171,7 +2158,6 @@ export default function App() {
             <Text style={themeStyles.description}>
               Personalize how Matrix looks and works.
             </Text>
-            <HeyMatrixSettings light={isLightTheme} />
             <Text style={themeStyles.sectionTitle}>APPEARANCE</Text>
             <View style={themeStyles.settingsCard}>
               <Text style={themeStyles.settingsTitle}>Theme</Text>
@@ -3017,7 +3003,6 @@ export default function App() {
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%", flex: 1, justifyContent: "center" }}>
           <View style={themeStyles.scheduleModal}>
             <Text style={themeStyles.modalTitle}>{editingReminderId ? "EDIT REMINDER" : "CREATE REMINDER"}</Text>
-            {!!voiceTranscript && <Text style={themeStyles.modalSubtitle}>Heard: {voiceTranscript}{"\n"}Review the title and local date/time below. Tap SAVE to confirm.</Text>}
             <Text style={themeStyles.modalSubtitle}>
               For{" "}
               {selectedCalendarDate.toLocaleDateString([], {

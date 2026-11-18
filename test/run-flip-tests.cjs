@@ -12,7 +12,7 @@ const jars = artifacts.flatMap(artifact => {
 });
 if (!jars.some(file => file.includes('kotlin-compiler-embeddable'))) throw new Error('Kotlin compiler not cached; install Kotlin or run this test in the Android build environment.');
 const output = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-flip-test-'));
-const stdlib = jars.find(file => file.includes('/kotlin-stdlib/'));
+const stdlib = jars.find(file => file.split(path.sep).includes('kotlin-stdlib'));
 const compile = spawnSync('java', ['-cp', jars.join(path.delimiter), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler', '-no-stdlib', '-no-reflect', '-classpath', stdlib, '-d', output, 'node_modules/react-native-alarm-scheduler/android/src/main/java/expo/modules/alarm/MatrixFlipDetector.kt', 'test/MatrixFlipDetectorTest.kt'], { stdio: 'inherit' });
 if (compile.status !== 0) process.exit(compile.status || 1);
 const run = spawnSync('java', ['-cp', [output, stdlib].join(path.delimiter), 'expo.modules.alarm.MatrixFlipDetectorTestKt'], { stdio: 'inherit' });

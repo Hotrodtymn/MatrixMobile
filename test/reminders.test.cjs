@@ -110,18 +110,13 @@ test('legacy defaults and unrelated stored data survive actions', async () => {
 });
 
 const futureDraft = id => ({ id, title: 'Call Mom', date: new Date(Date.now()+86400000).toISOString(), notificationId: '', recurrence: 'once' });
-test('shared manual/voice commit schedules and persists once for a stable confirmed session', async () => {
+test('editor commit schedules and persists once for a stable reminder ID', async () => {
  const h = harness();
- const draft = futureDraft('voice-session');
- await h.api.commitReminder(draft, { base: [], notificationsEnabled: true, authorized: async () => true });
- await h.api.commitReminder(draft, { base: [], notificationsEnabled: true, authorized: async () => true });
+ const draft = futureDraft('stable-reminder');
+ await h.api.commitReminder(draft, { base: [], notificationsEnabled: true });
+ await h.api.commitReminder(draft, { base: [], notificationsEnabled: true });
  assert.equal(h.read().length, 1); assert.equal(h.scheduled.size, 1);
  assert.equal(h.read()[0].title, 'Call Mom'); assert.ok(h.read()[0].notificationId);
-});
-test('revoked confirmation after scheduling rolls back alerts and writes nothing', async () => {
- const h = harness(); let checks = 0;
- await assert.rejects(h.api.commitReminder(futureDraft('cancelled'), { base: [], notificationsEnabled: true, authorized: async () => ++checks === 1 }), /cancelled/);
- assert.equal(h.scheduled.size, 0); assert.equal(h.storage.has('matrix.reminders.v1'), false);
 });
 test('shared commit preserves unrelated reminders, notes and alarms and edits without duplicate alerts', async () => {
  const h = harness(new Map([['matrix.reminders.v1', JSON.stringify([reminder])], ['matrix.notes.v1','keep-notes'], ['matrix.alarms.v1','keep-alarms']]));

@@ -413,14 +413,12 @@ export async function refreshLegacyNotificationText(reminders: Reminder[]) {
   }
 }
 
-// Shared commit path for the editor and explicitly confirmed voice proposals.
+// Serialized editor save with scheduling rollback and protection against stale writes.
 export async function commitReminder(draft: Reminder, options: {
-  base?: Reminder[]; notificationsEnabled: boolean; authorized?: () => Promise<boolean>;
+  base?: Reminder[]; notificationsEnabled: boolean;
 }): Promise<{ records: Reminder[]; cleanupFailed: boolean }> {
   return serializeReminderMutation(async () => {
-    const authorize = options.authorized ?? (async () => true);
     const valid = async () => {
-      if (!await authorize()) throw new Error('Reminder confirmation expired or was cancelled.');
       if (!draft.title.trim() || draft.title.trim().length > 150 || !Number.isFinite(Date.parse(draft.date)) || Date.parse(draft.date) <= Date.now()) throw new Error('Reminder needs a valid title and future time.');
       if (draft.recurrence === 'selectedDays' && !draft.weekdays?.length) throw new Error('Select reminder weekdays.');
     };
@@ -429,13 +427,13 @@ export async function commitReminder(draft: Reminder, options: {
     const base = options.base ?? latest;
     const editing = base.some(item => item.id === draft.id);
     const previous = latest.find(item => item.id === draft.id);
-    // Voice session IDs are stable: a repeated confirmed save cannot duplicate it.
+    // Stable reminder IDs prevent duplicate saves.
     if (!editing && previous) return { records: latest, cleanupFailed: false };
     if (editing && !previous) throw new Error('This reminder was deleted.');
     let ids: string[] = [];
     try {
       ids = options.notificationsEnabled ? await scheduleReminder(draft) : [];
-      await valid(); // Recheck cancellation/lock/background and time after scheduling.
+      await valid(); // Recheck validation and time after scheduling.
       const saved = { ...draft, title: draft.title.trim(), notificationId: ids[0] || '', notificationIds: ids };
       const desired = editing ? base.map(item => item.id === saved.id ? saved : item) : [saved, ...base];
       const records = mergeReminderChanges(base, desired, latest);

@@ -24,16 +24,8 @@
     "ios": {},
     "plugins": [
       "react-native-alarm-scheduler",
-      "expo-notifications",
-      [
-        "expo-speech-recognition",
-        {
-          "microphonePermission": "Allow Matrix to hear push-to-talk reminder commands.",
-          "speechRecognitionPermission": "Allow Matrix to transcribe reminder commands."
-        }
-      ],
-      "./modules/hey-matrix/app.plugin.js"
+      "expo-notifications"
     ],
-    "version": "1.4.1"
+    "version": "1.5.0"
   }
 }
