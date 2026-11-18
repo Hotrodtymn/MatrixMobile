@@ -24,7 +24,26 @@
     "ios": {},
     "plugins": [
       "react-native-alarm-scheduler",
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "react-native-android-widget",
+        {
+          "widgets": [
+            {
+              "name": "MatrixCompatibility",
+              "label": "Matrix Compatibility",
+              "description": "Static native compilation spike; no reminder data.",
+              "minWidth": "180dp",
+              "minHeight": "80dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 1,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 0,
+              "widgetCategory": "home_screen"
+            }
+          ]
+        }
+      ]
     ],
     "version": "1.5.0"
   }
