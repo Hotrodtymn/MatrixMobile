@@ -1,6 +1,6 @@
 # Phase 3 plan: Android Home-Screen Widget
 
-Current status: minimal 0.26.0 compatibility spike prepared on feature/android-home-widget. Automated/configuration checks pass; native compilation is blocked by the local toolchain. See the spike results below. The original planning notes are retained as historical context.
+Current status: minimal 0.26.0 compatibility spike prepared and committed on feature/android-home-widget. Automated/configuration checks pass; local native compilation is blocked by the toolchain. The one approved isolated EAS build is submitted and remains queued; compatibility is not established. See the spike results below. The original planning notes are retained as historical context.
 
 ## Repository preparation
 
@@ -138,3 +138,18 @@ The user approved exactly one internal Android compatibility build and no full w
 The plugin/native dependency requires a new native APK; it does not require changing appVersion/runtime merely to compile this isolated probe. Keep version/runtime 1.5.0 for this test only, as previously requested. No widget-dependent OTA will be published. The new build uses an empty isolated channel; shared preview stays mapped to its existing Phase 2 branch/update. A later widget release needs a reviewed runtime boundary before shared-channel deployment. Remote Android versionCode auto-increment is inherited from preview and is separate from the unchanged appVersion/runtime; the actual build code will be reported by EAS.
 
 Use the existing Android keystore with non-interactive frozen credentials. Stop on an unexpected payment requirement, credential change or destructive setup. Submit only one build, and do not install it automatically. Actual compilation status is reported after monitoring the EAS result.
+
+## Submitted isolated build: result pending
+
+- Spike commit: ac98132 (test: add Android widget compatibility spike).
+- Profile/build source commit: 23d8bee (build: isolate Android widget compatibility test).
+- Exactly one command submitted: npx eas-cli build --platform android --profile widget-compat-spike --non-interactive --freeze-credentials --no-wait.
+- Build ID: 3b7150bb-5b1e-4150-abed-17d3111b657d.
+- URL: https://expo.dev/accounts/hotrodtymn/projects/matrix/builds/3b7150bb-5b1e-4150-abed-17d3111b657d.
+- EAS final observed status for this task: IN_QUEUE, priority NORMAL, no reported error. Extended polling did not reach compilation. The remote build remains submitted/running through its queue; it was not canceled or retried. No completion or background-notification promise is made.
+- App version/runtime remain 1.5.0; inherited remote Android versionCode incremented 11 to 12. Package remains com.hotrodtymn.matrix.
+- Existing default keystore Build Credentials Kb1qq3AZ-X was reused with frozen credentials. No payment requirement, credential reset or destructive prompt appeared; this is not a claim about the account's ultimate billing statement.
+- Live routing confirmed widget-compat-spike -> widget-compat-spike, with zero published updates. Shared preview -> preview remains on the published Phase 2 update; ios-preview is separate. No OTA update was published.
+- Existing automated results remain 53 passing tests, TypeScript/lint/export/config checks and alarm hashes passing. Existing Expo Doctor patch warnings remain; there are no native compiler warnings/errors to report because no worker/compiler has run yet.
+
+Compatibility conclusion: UNKNOWN / blocked on the EAS queue. Do not treat successful upload, static validation or submission as native compilation success. Read this exact build's terminal result/logs next; do not start another build without approval. If it succeeds, first manually test the static widget's add/resize/remove and cold-process rendering on Samsung, with existing alarm/Flip to Silence regressions. Full widget implementation remains deferred. No APK installation, merge, push, runtime bump or production configuration change occurred.
