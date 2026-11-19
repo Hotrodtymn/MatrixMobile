@@ -1,3 +1,5 @@
+import { notifyWidgetDataChanged } from "./src/services/widgetDataEvents";
+import { subscribeTodayWidgetLinks } from "./src/services/todayWidgetNavigation";
 import { ReminderMetadataFields, ReminderListManager, PrioritySelector } from "./src/components/ReminderMetadataControls";
 import { ReminderPriority, ReminderList, ReminderFilters, reminderPriority, reminderListId, matchesReminderFilters, compareReminderPriority } from "./src/services/reminderMetadata";
 import { readReminderLists, updateReminderMetadata } from "./src/services/reminders";
@@ -9,6 +11,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
+  Linking,
   AppState,
   useColorScheme,
   Modal,
@@ -399,6 +402,16 @@ export default function App() {
         new Date().getDate(),
       ),
   );
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    return subscribeTodayWidgetLinks(Linking, () => {
+      setShowHome(true); setShowMenu(false); setShowSettings(false);
+      setShowClock(false); setShowCalendar(false); setShowNotes(false);
+      setShowTasks(false); setShowTaskList(false);
+      setShowScheduleModal(false); setShowCalendarReminderModal(false); setShowAlarmModal(false);
+      setShowTodayDashboard(true);
+    });
+  }, []);
   const [notes, setNotes] = useState<Note[]>([]);
   const [noteTitle, setNoteTitle] = useState("");
   const [noteBody, setNoteBody] = useState("");
@@ -586,6 +599,7 @@ export default function App() {
   async function saveAlarms(updated: MatrixAlarm[]) {
     await AsyncStorage.setItem(ALARMS_KEY, JSON.stringify(updated));
     setAlarms(updated);
+    notifyWidgetDataChanged();
   }
   async function scheduleAlarmNotification(
     alarm: MatrixAlarm,

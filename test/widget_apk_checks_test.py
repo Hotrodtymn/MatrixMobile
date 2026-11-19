@@ -1,4 +1,4 @@
-﻿"""Regression checks for failures that JavaScript widget tests cannot detect."""
+"""Regression checks for failures that JavaScript widget tests cannot detect."""
 import importlib.util
 import sys
 import unittest
@@ -99,6 +99,18 @@ class ApkGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'XML'): self.check()
         del self.table[0x7f130001]
         self.assertEqual(self.check()['widget'], 'absent')
+
+    def test_functional_today_requires_periodic_refresh_and_cold_start_filter(self):
+        self.options['functional_today'] = True
+        self.receiver.set('label', 'Matrix Today')
+        self.provider.set('updatePeriodMillis', '1800000')
+        with self.assertRaisesRegex(ValueError, 'intent filter'): self.check()
+        activity = ET.SubElement(self.app, 'activity')
+        intent = ET.SubElement(activity, 'intent-filter')
+        ET.SubElement(intent, 'data', scheme='matrix-today', host='dashboard', path='/today')
+        self.assertEqual(self.check()['widget'], 'present')
+        self.provider.set('updatePeriodMillis', '0')
+        with self.assertRaisesRegex(ValueError, 'updatePeriodMillis'): self.check()
 
 
 if __name__ == '__main__':

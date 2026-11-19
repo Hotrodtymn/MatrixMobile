@@ -8,7 +8,23 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/App_icon.png",
         "backgroundColor": "#000000"
-      }
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "scheme": "matrix-today",
+              "host": "dashboard",
+              "path": "/today"
+            }
+          ]
+        }
+      ]
     },
     "runtimeVersion": {
       "policy": "appVersion"
@@ -31,14 +47,14 @@
           "widgets": [
             {
               "name": "MatrixCompatibility",
-              "label": "Matrix Compatibility",
-              "description": "Static native compilation spike; no reminder data.",
+              "label": "Matrix Today",
+              "description": "Today reminders and next alarm. Tap to open Today.",
               "minWidth": "180dp",
               "minHeight": "80dp",
               "targetCellWidth": 2,
               "targetCellHeight": 1,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 0,
+              "updatePeriodMillis": 1800000,
               "widgetCategory": "home_screen"
             }
           ]

@@ -15,11 +15,13 @@ function harness(storage = new Map()) {
     async scheduleNotificationAsync(value) { notificationCalls.schedule++; const id = value.identifier || `id-${scheduled.size}`; scheduled.set(id, { ...value, identifier: id }); return id; },
   };
   const asyncStorage = { async getItem(key) { return storage.get(key) ?? null; }, async setItem(key, value) { storage.set(key, value); }, async multiSet(items) { items.forEach(([k,v]) => storage.set(k,v)); } };
+  const widgetEvents = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/services/widgetDataEvents.ts','utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:widgetEvents,Set,Promise});
   const exports = {};
   const code = ts.transpileModule(fs.readFileSync('src/services/reminders.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText;
-  vm.runInNewContext(code, { exports, Date, Set, Promise, console, require(name) { return name === 'expo-notifications' ? notifications : name === 'react-native' ? { Platform: { OS: 'android' } } : { default: asyncStorage, __esModule: true }; } });
+  vm.runInNewContext(code, { exports, Date, Set, Promise, console, require(name) { if(name === './widgetDataEvents') return widgetEvents; return name === 'expo-notifications' ? notifications : name === 'react-native' ? { Platform: { OS: 'android' } } : { default: asyncStorage, __esModule: true }; } });
   const read = () => JSON.parse(storage.get('matrix.reminders.v1'));
-  return { api: exports, storage, scheduled, read, asyncStorage, notificationCalls };
+  return { api: exports, storage, scheduled, read, asyncStorage, notificationCalls, widgetEvents };
 }
 const reminder = { id: 'r', title: 'Medication', description: 'After dinner', notificationId: 'daily-r', date: new Date().toISOString(), recurrence: 'daily' };
 const response = action => ({ actionIdentifier: action, notification: { date: 1234, request: { identifier: 'daily-r', content: { data: { reminderId: 'r' } } } } });
@@ -205,4 +207,14 @@ test('notification completion and stale UI metadata preserve additive fields and
  const record={...reminder,priority:'high',listId:'list-a'};const h=harness(new Map([['matrix.reminders.v1',JSON.stringify([record])]]));
  await h.api.handleNotificationResponse(response('MARK_COMPLETED'));assert.equal(h.read()[0].priority,'high');assert.equal(h.read()[0].listId,'list-a');assert.equal(h.read()[0].completed,false);assert.equal(h.read()[0].notificationId,record.notificationId);
  await h.api.updateReminderMetadata('r','medium');assert.ok(h.read()[0].completedThrough);assert.equal(h.read()[0].recurrence,'daily');assert.equal(h.scheduled.size,0);
+});
+
+test('widget observer sees persisted notification action state and cannot change its result',async()=>{
+ const h=harness(new Map([['matrix.reminders.v1',JSON.stringify([reminder])]]));
+ const snapshots=[];h.widgetEvents.subscribeWidgetData(()=>{snapshots.push(h.read());});
+ h.widgetEvents.subscribeWidgetData(()=>{throw Error('widget unavailable');});
+ await h.api.handleNotificationResponse(response('MARK_COMPLETED'));
+ assert.equal(snapshots.length,1);assert.ok(snapshots[0][0].completedThrough);assert.equal(h.notificationCalls.schedule,0);
+ let calls=0;h.widgetEvents.subscribeWidgetData(()=>calls++);
+ await assert.rejects(h.api.serializeReminderMutation(async()=>{throw Error('save failed');}));assert.equal(calls,0);
 });

@@ -1,3 +1,4 @@
+import { notifyWidgetDataChanged } from "./widgetDataEvents";
 import type { ReminderPriority, ReminderList } from "./reminderMetadata";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
@@ -88,6 +89,7 @@ let mutationQueue: Promise<unknown> = Promise.resolve();
 export function serializeReminderMutation<T>(work: () => Promise<T>): Promise<T> {
   const result = mutationQueue.then(work);
   mutationQueue = result.catch(() => undefined);
+  void result.then(() => notifyWidgetDataChanged(), () => undefined);
   return result;
 }
 export async function cancelReminderNotifications(

@@ -88,7 +88,7 @@ def dex_classes(archive):
 
 
 def validate(root, table, load_xml, classes, *, version_code, channel,
-             expect_widget, package='com.hotrodtymn.matrix', runtime='1.5.0'):
+             expect_widget, package='com.hotrodtymn.matrix', runtime='1.5.0', functional_today=False):
  def require(ok,message):
   if not ok:raise ValueError(message)
  def values(ref):
@@ -124,17 +124,20 @@ def validate(root, table, load_xml, classes, *, version_code, channel,
   require(not widget_classes,'Recovery contains native widget classes')
   require(not widget_resources,'Recovery contains widget provider XML')
   return {'widget':'absent','providerCount':0}
+ if functional_today:
+  links=app.findall('./activity/intent-filter/data')
+  require(any(x.get('scheme')=='matrix-today' and x.get('host')=='dashboard' and x.get('path')=='/today' for x in links),'Missing Today cold-start intent filter')
  require(len(providers)==1,'Expected exactly one widget provider')
  receiver,actions,metadata=providers[0]
  require(receiver.get('name')==package+'.widget.MatrixCompatibility','Wrong widget receiver')
  require(receiver.get('enabled','true')!='false','Widget receiver disabled')
- require(receiver.get('label')=='Matrix Compatibility','Wrong widget label')
+ require(receiver.get('label')==('Matrix Today' if functional_today else 'Matrix Compatibility'),'Wrong widget label')
  require('android.appwidget.action.APPWIDGET_UPDATE' in actions,'Missing APPWIDGET_UPDATE action')
  require(metadata is not None,'Missing android.appwidget.provider metadata')
  paths=values(metadata.get('resource'));require(bool(paths),'Missing provider XML')
  for path in paths:
   provider=load_xml(path);require(provider.tag=='appwidget-provider','Invalid provider XML root')
-  for key,expected in [('minWidth','180.0dp'),('minHeight','80.0dp'),('targetCellWidth','2'),('targetCellHeight','1'),('resizeMode','3'),('updatePeriodMillis','0')]:
+  for key,expected in [('minWidth','180.0dp'),('minHeight','80.0dp'),('targetCellWidth','2'),('targetCellHeight','1'),('resizeMode','3'),('updatePeriodMillis','1800000' if functional_today else '0')]:
    require(provider.get(key)==expected,'Wrong widget '+key)
   require(int(provider.get('widgetCategory','0'))&1,'Widget not available on home screen')
   require(not provider.get('configure'),'Unexpected configuration activity')
@@ -155,12 +158,13 @@ def main():
  parser.add_argument('--version-code',type=int,required=True)
  parser.add_argument('--channel',required=True)
  parser.add_argument('--runtime',default='1.5.0')
+ parser.add_argument('--functional-today',action='store_true')
  parser.add_argument('--package',default='com.hotrodtymn.matrix')
  args=parser.parse_args()
  with zipfile.ZipFile(args.apk) as archive:
   result=validate(xml(archive.read('AndroidManifest.xml')),resources(archive.read('resources.arsc')),
      lambda path:xml(archive.read(path)),dex_classes(archive),version_code=args.version_code,
-     channel=args.channel,expect_widget=args.expect_widget,package=args.package,runtime=args.runtime)
+     channel=args.channel,expect_widget=args.expect_widget,package=args.package,runtime=args.runtime,functional_today=args.functional_today)
  result.update(package=args.package,versionCode=args.version_code,runtime=args.runtime,
                channel=args.channel,apk=str(args.apk),sha256=hashlib.sha256(args.apk.read_bytes()).hexdigest())
  print(json.dumps(result,indent=2))

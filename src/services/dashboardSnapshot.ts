@@ -9,9 +9,9 @@ function records<T>(raw: string | null, label: string): T[] {
   return value as T[];
 }
 // Read-only snapshot: no writes, migrations, permission requests or scheduling.
-export async function readDashboard() {
-  const [reminders, alarms, tasks] = await Promise.all([
-    AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(ALARMS_KEY), taskStore.list(),
+export async function readReminderAlarmSnapshot() {
+  const [reminders, alarms] = await Promise.all([
+    AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(ALARMS_KEY),
   ]);
   const reminderRecords = records<Reminder>(reminders, 'Reminders');
   const alarmRecords = records<MatrixAlarm>(alarms, 'Alarms');
@@ -19,5 +19,10 @@ export async function readDashboard() {
     (item.recurrence !== undefined && !['once','daily','weekly','monthly','yearly','selectedDays'].includes(item.recurrence)) ||
     (item.weekdays !== undefined && (!Array.isArray(item.weekdays) || item.weekdays.some(day => !Number.isInteger(day) || day < 0 || day > 6))))) throw new Error('Reminders could not be read.');
   if (alarmRecords.some(item => typeof item.enabled !== 'boolean' || (item.title !== undefined && typeof item.title !== 'string'))) throw new Error('Alarms could not be read.');
-  return { reminders: reminderRecords, alarms: alarmRecords, ...tasks };
+  return { reminders: reminderRecords, alarms: alarmRecords };
+}
+
+export async function readDashboard() {
+  const [snapshot, tasks] = await Promise.all([readReminderAlarmSnapshot(), taskStore.list()]);
+  return { ...snapshot, ...tasks };
 }
